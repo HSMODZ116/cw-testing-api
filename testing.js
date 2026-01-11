@@ -1,122 +1,34 @@
-export default {
-  async fetch(request) {
-    const url = new URL(request.url);
+addEventListener("fetch", (event) => {
+  event.respondWith(handleRequest(event.request));
+});
 
-    // Only GET (simple)
-    if (request.method !== "GET") {
-      return json(
-        {
-          status: false,
-          message: "Method not allowed",
-          developer: "Haseeb Sahil",
-          channel: "@hsmodzofc2",
-        },
-        405
-      );
-    }
-
-    const raw = url.searchParams.get("num");
-
-    // If num missing -> show usage/help
-    if (!raw) {
-      return json(
-        usageResponse(url),
-        200
-      );
-    }
-
-    const pk = normalizePkNumber(raw);
-
-    // If invalid -> show usage/help (instead of invalid-number JSON)
-    if (!pk) {
-      return json(
-        usageResponse(url, "Invalid number. Please use correct format."),
-        200
-      );
-    }
-
-    // CallApp expects URL-encoded plus
-    const cpn = pk.replace("+", "%2B");
-
-    const upstreamUrl =
-      "https://s.callapp.com/callapp-server/csrch" +
-      `?cpn=${cpn}` +
-      "&myp=fb.877409278562861&ibs=0&cid=0" +
-      "&tk=0080528975&cvc=2239";
-
-    const upstreamRes = await fetch(upstreamUrl, {
-      method: "GET",
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Linux; Android 15; wv)",
-        "Accept-Encoding": "identity",
-        Accept: "application/json",
-      },
-    });
-
-    if (!upstreamRes.ok) {
-      return json(
-        {
-          status: false,
-          message: "Source API error",
-          developer: "Haseeb Sahil",
-          channel: "@hsmodzofc2",
-        },
-        502
-      );
-    }
-
-    const text = await upstreamRes.text();
-    let data;
-
-    try {
-      data = JSON.parse(text);
-    } catch {
-      return json(
-        {
-          status: false,
-          message: "Source returned non-JSON response",
-          developer: "Haseeb Sahil",
-          channel: "@hsmodzofc2",
-        },
-        502
-      );
-    }
-
-    // Attach your branding + normalized
-    if (isPlainObject(data)) {
-      data.developer = "Haseeb Sahil";
-      data.channel = "@hsmodzofc2";
-      data.source = "hidden";
-      data.normalized = pk;
-      return jsonPretty(data, 200);
-    }
-
-    return jsonPretty(
-      {
-        result: data,
-        developer: "Haseeb Sahil",
-        channel: "@hsmodzofc2",
-        source: "hidden",
-        normalized: pk,
-      },
-      200
-    );
-  },
+const HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+  "Content-Type": "application/json",
+  "Cache-Control": "public, max-age=300",
+  "X-Content-Type-Options": "nosniff",
 };
 
-// ---------- Helpers ----------
+function respond(data, status = 200, pretty = false) {
+  const body = pretty ? JSON.stringify(data, null, 4) : JSON.stringify(data);
+  return new Response(body, {
+    status,
+    headers: HEADERS,
+  });
+}
 
 function usageResponse(url, note) {
-  const origin = url.origin || "";
   return {
     status: true,
-    message: note || "API is working. Use query parameter `num` to search.",
+    message: note || "API is working. Use query parameter `num`.",
     how_to_use: {
       format: "GET /?num=NUMBER",
       examples: [
-        `${origin}/?num=03068060398`,
-        `${origin}/?num=923068060398`,
-        `${origin}/?num=+923068060398`,
+        `${url.origin}/?num=03068060398`,
+        `${url.origin}/?num=923068060398`,
+        `${url.origin}/?num=+923068060398`,
       ],
       accepted_formats: [
         "030xxxxxxxx (11 digits)",
@@ -130,23 +42,25 @@ function usageResponse(url, note) {
   };
 }
 
-function normalizePkNumber(raw) {
-  const s = String(raw || "").trim();
-  if (!s) return null;
+function normalizeNumber(input) {
+  // keep digits only (and optional leading +)
+  const raw = String(input || "").trim();
+  if (!raw) return null;
 
-  const digits = s.replace(/[^\d]/g, "");
+  const digits = raw.replace(/[^\d]/g, "");
 
-  // 030xxxxxxxx (11 digits)
+  // Pakistan formats:
+  // 030xxxxxxxx (11 digits) => +92 + 3xxxxxxxxx
   if (digits.startsWith("03") && digits.length === 11) {
     return "+92" + digits.slice(1);
   }
 
-  // 92xxxxxxxxxx (12 digits)
+  // 92xxxxxxxxxx (12 digits) => +92xxxxxxxxxx
   if (digits.startsWith("92") && digits.length === 12) {
     return "+" + digits;
   }
 
-  // 3xxxxxxxxx (10 digits)
+  // 3xxxxxxxxx (10 digits) => +923xxxxxxxxx
   if (digits.startsWith("3") && digits.length === 10) {
     return "+92" + digits;
   }
@@ -154,20 +68,101 @@ function normalizePkNumber(raw) {
   return null;
 }
 
-function isPlainObject(x) {
-  return x !== null && typeof x === "object" && !Array.isArray(x);
-}
+async function handleRequest(request) {
+  // CORS preflight
+  if (request.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: HEADERS });
+  }
 
-function json(obj, status = 200) {
-  return new Response(JSON.stringify(obj), {
-    status,
-    headers: { "content-type": "application/json; charset=utf-8" },
-  });
-}
+  if (request.method !== "GET") {
+    return respond(
+      {
+        status: false,
+        message: "Only GET method allowed",
+        developer: "Haseeb Sahil",
+        channel: "@hsmodzofc2",
+      },
+      405
+    );
+  }
 
-function jsonPretty(obj, status = 200) {
-  return new Response(JSON.stringify(obj, null, 4), {
-    status,
-    headers: { "content-type": "application/json; charset=utf-8" },
-  });
+  const url = new URL(request.url);
+
+  // If no num -> show usage guide
+  const originalInput = url.searchParams.get("num");
+  if (!originalInput) {
+    return respond(usageResponse(url), 200, true);
+  }
+
+  const normalized = normalizeNumber(originalInput);
+
+  // If invalid -> show usage guide (no "Invalid Pakistani number" response)
+  if (!normalized) {
+    return respond(
+      usageResponse(url, "Invalid number. Please use correct format."),
+      200,
+      true
+    );
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+
+    // CallApp expects URL-encoded plus sign
+    const cpn = normalized.replace("+", "%2B");
+
+    const apiUrl =
+      "https://s.callapp.com/callapp-server/csrch" +
+      `?cpn=${cpn}` +
+      "&myp=fb.877409278562861&ibs=0&cid=0" +
+      "&tk=0080528975&cvc=2239";
+
+    const res = await fetch(apiUrl, {
+      method: "GET",
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 15; wv)",
+        "Accept-Encoding": "identity",
+        Accept: "application/json",
+      },
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    if (!res.ok) throw new Error("Upstream API error");
+
+    const data = await res.json();
+
+    // add branding + normalized
+    if (data && typeof data === "object" && !Array.isArray(data)) {
+      data.developer = "Haseeb Sahil";
+      data.channel = "@hsmodzofc2";
+      data.source = "hidden";
+      data.normalized = normalized;
+      return respond(data, 200, true);
+    }
+
+    return respond(
+      {
+        result: data,
+        developer: "Haseeb Sahil",
+        channel: "@hsmodzofc2",
+        source: "hidden",
+        normalized: normalized,
+      },
+      200,
+      true
+    );
+  } catch (err) {
+    return respond(
+      {
+        status: false,
+        message: err && err.name === "AbortError" ? "Request timeout" : "Internal server error",
+        developer: "Haseeb Sahil",
+        channel: "@hsmodzofc2",
+      },
+      500
+    );
+  }
 }
