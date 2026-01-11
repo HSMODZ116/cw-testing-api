@@ -1,117 +1,161 @@
 export default {
   async fetch(request, env, ctx) {
-    const url = new URL(request.url);
+    try {
+      const url = new URL(request.url);
 
-    // Root path logic
-    if (url.pathname === "/") {
-      return new Response(JSON.stringify({
-        message: "Welcome to Number Info API",
-        usage: "/info?number=PHONE_NUMBER"
-      }), {
-        headers: { "Content-Type": "application/json" }
-      });
-    }
-
-    // /info path logic
-    if (url.pathname === "/info") {
-      const phone_number = url.searchParams.get("number");
-
-      if (!phone_number) {
-        return new Response(JSON.stringify({ error: "Please provide ?number= parameter" }), {
-          status: 400,
-          headers: { "Content-Type": "application/json" }
-        });
+      // Only GET supported (same as your Flask GET "/")
+      if (request.method !== "GET") {
+        return json(
+          { status: false, message: "Method not allowed", developer: "abbas" },
+          405
+        );
       }
 
-      // Validation logic
-      const isValid = /^\+?\d+$/.test(phone_number);
-      if (!isValid) {
-        return new Response(JSON.stringify({ error: "Invalid phone number format" }), {
-          status: 400,
-          headers: { "Content-Type": "application/json" }
-        });
-      }
+      // Optional: allow root path only; otherwise still handle all paths like Vercel routes did
+      // (Your vercel.json routed everything to app.py)
+      // We'll just behave same: accept any path.
+      const raw = url.searchParams.get("num") || "";
+      const pk = normalizePkNumber(raw);
 
-      try {
-        const targetUrl = "https://calltracer.in";
-        const body = new URLSearchParams();
-        body.append("country", "PK");
-        body.append("q", phone_number);
-
-        const response = await fetch(targetUrl, {
-          method: "POST",
-          headers: {
-            "Host": "calltracer.in",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Content-Type": "application/x-www-form-urlencoded"
+      if (!pk) {
+        return json(
+          {
+            status: false,
+            message: "Invalid Pakistani number",
+            examples: ["03068060398", "923068060398", "+923068060398"],
+            developer: "abbas",
           },
-          body: body.toString()
-        });
-
-        if (!response.ok) {
-          return new Response(JSON.stringify({ error: `Failed to fetch data. HTTP ${response.status}` }), {
-            status: 500,
-            headers: { "Content-Type": "application/json" }
-          });
-        }
-
-        const html = await response.text();
-
-        // Function to extract table cell value using Regex
-        const getValue = (label, source) => {
-          // Yeh regex label ko find karke uske agle <td> ka data nikalta hai
-          const regex = new RegExp(`<td>[^<]*${label}[^<]*<\/td>\\s*<td>([^<]*)<\/td>`, "i");
-          const match = source.match(regex);
-          return match ? match[1].trim() : "N/A";
-        };
-
-        const data = {
-          "Number": phone_number,
-          "Complaints": getValue("Complaints", html),
-          "Owner Name": getValue("Owner Name", html),
-          "SIM Card": getValue("SIM card", html),
-          "Mobile State": getValue("Mobile State", html),
-          "IMEI Number": getValue("IMEI number", html),
-          "MAC Address": getValue("MAC address", html),
-          "Connection": getValue("Connection", html),
-          "IP Address": getValue("IP address", html),
-          "Owner Address": getValue("Owner Address", html),
-          "Hometown": getValue("Hometown", html),
-          "Reference City": getValue("Refrence City", html),
-          "Owner Personality": getValue("Owner Personality", html),
-          "Language": getValue("Language", html),
-          "Mobile Locations": getValue("Mobile Locations", html),
-          "Country": getValue("Country", html),
-          "Tracking History": getValue("Tracking History", html),
-          "Tracker ID": getValue("Tracker Id", html),
-          "Tower Locations": getValue("Tower Locations", html),
-        };
-
-        // Check if all fields are N/A
-        const allNA = Object.keys(data).filter(k => k !== "Number").every(k => data[k] === "N/A");
-        if (allNA) {
-          return new Response(JSON.stringify({ error: "No data found for this number." }), {
-            status: 404,
-            headers: { "Content-Type": "application/json" }
-          });
-        }
-
-        return new Response(JSON.stringify(data), {
-          headers: { 
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*" // CORS allow karne ke liye
-          }
-        });
-
-      } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), {
-          status: 500,
-          headers: { "Content-Type": "application/json" }
-        });
+          400
+        );
       }
-    }
 
-    return new Response("Not Found", { status: 404 });
+      // CallApp expects URL-encoded plus
+      const cpn = pk.replace("+", "%2B");
+
+      const upstreamUrl =
+        "https://s.callapp.com/callapp-server/csrch" +
+        `?cpn=${cpn}` +
+        "&myp=fb.877409278562861&ibs=0&cid=0" +
+        "&tk=0080528975&cvc=2239";
+
+      const upstreamRes = await fetch(upstreamUrl, {
+        method: "GET",
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Linux; Android 15; wv)",
+          "Accept-Encoding": "identity",
+          Accept: "application/json",
+        },
+        // Cloudflare will enforce HTTPS certificate validity (no verify=false here)
+      });
+
+      if (!upstreamRes.ok) {
+        return json(
+          {
+            status: false,
+            message: "Source API error",
+            developer: "abbas",
+          },
+          502
+        );
+      }
+
+      const text = await upstreamRes.text();
+
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch (e) {
+        return json(
+          {
+            status: false,
+            message: "Source returned non-JSON response",
+            developer: "abbas",
+          },
+          502
+        );
+      }
+
+      if (!data) {
+        return json(
+          { status: false, message: "No data found", developer: "abbas" },
+          404
+        );
+      }
+
+      // Add your fields (same as Flask)
+      if (isPlainObject(data)) {
+        data.developer = "abbas";
+        data.source = "hidden";
+        data.normalized = pk;
+        // Pretty JSON output like indent=4
+        return jsonPretty(data, 200);
+      } else {
+        const wrapped = {
+          result: data,
+          developer: "abbas",
+          source: "hidden",
+          normalized: pk,
+        };
+        return jsonPretty(wrapped, 200);
+      }
+    } catch (err) {
+      // If anything unexpected happens
+      return json(
+        { status: false, message: "Server error", developer: "abbas" },
+        500
+      );
+    }
   },
 };
+
+function normalizePkNumber(raw) {
+  if (raw == null) return null;
+
+  const s = String(raw).trim();
+  if (!s) return null;
+
+  // keep only digits
+  const digits = s.replace(/[^\d]/g, "");
+
+  // 030xxxxxxxx (11 digits)
+  if (digits.startsWith("03") && digits.length === 11) {
+    return "+92" + digits.slice(1);
+  }
+
+  // 92xxxxxxxxxx (12 digits)
+  if (digits.startsWith("92") && digits.length === 12) {
+    return "+" + digits;
+  }
+
+  // 3xxxxxxxxx (10 digits)
+  if (digits.startsWith("3") && digits.length === 10) {
+    return "+92" + digits;
+  }
+
+  return null;
+}
+
+function isPlainObject(x) {
+  return x !== null && typeof x === "object" && !Array.isArray(x);
+}
+
+function json(obj, status = 200) {
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      // If you want CORS, uncomment:
+      // "access-control-allow-origin": "*",
+    },
+  });
+}
+
+function jsonPretty(obj, status = 200) {
+  return new Response(JSON.stringify(obj, null, 4), {
+    status,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      // "access-control-allow-origin": "*",
+    },
+  });
+}
