@@ -1,124 +1,24 @@
-// Cloudflare Worker - Facebook Downloader (via fdown.net)
-// Route: /fb/dl?url=...
-
 export default {
   async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+
+    // CORS preflight
+    if (request.method === "OPTIONS") return corsPreflight();
+
     try {
-      const urlObj = new URL(request.url);
+      if (url.pathname === "/insta/dl") return handleInsta(url);
+      if (url.pathname === "/pnt/dl") return handlePinterest(url);
+      if (url.pathname === "/tik/dl") return handleTikTok(url);
 
-      // Only handle /fb/dl
-      if (urlObj.pathname !== "/fb/dl") {
-        return json({ error: "Not Found" }, 404);
-      }
-
-      const inputUrl = (urlObj.searchParams.get("url") || "").trim();
-      if (!inputUrl) {
-        return json(
-          {
-            error: "Missing 'url' query parameter",
-            developer: "Haseeb Sahil",
-            tg_channal: "@hsmodzofc2",
-          },
-          400
-        );
-      }
-
-      if (!isFacebookUrl(inputUrl)) {
-        return json(
-          {
-            error: "Only Facebook URLs are supported!",
-            developer: "Haseeb Sahil",
-            tg_channal: "@hsmodzofc2",
-          },
-          400
-        );
-      }
-
-      // Headers (avoid br/zstd issues; keep it simple)
-      const headers = {
-        "User-Agent":
-          "Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        Referer: "https://fdown.net/",
-        Origin: "https://fdown.net",
-      };
-
-      // 1) resolve final FB URL (follow redirects)
-      const finalFbUrl = await resolveFinalUrl(inputUrl, headers);
-
-      // 2) call fdown
-      const form = new FormData();
-      form.append("URLz", finalFbUrl);
-
-      const fdownResp = await fetch("https://fdown.net/download.php", {
-        method: "POST",
-        headers, // FormData sets boundary itself; CF will handle it fine
-        body: form,
-        redirect: "follow",
-      });
-
-      if (!fdownResp.ok) {
-        return json(
-          {
-            error: "Third-party service temporarily down",
-            developer: "Haseeb Sahil",
-            tg_channal: "@hsmodzofc2",
-          },
-          502
-        );
-      }
-
-      const html = await fdownResp.text();
-
-      // 3) Parse title, thumbnail
-      const title = parseTitle(html);
-      const thumbnail = parseThumbnail(html);
-
-      // 4) Extract download links (prefer buttons)
-      let links = extractButtonLinks(html);
-
-      // fallback: scan all anchors but keep only real links
-      if (links.length === 0) {
-        links = extractAllVideoLinks(html);
-      }
-
-      // dedupe
-      const seen = new Set();
-      const unique = [];
-      for (const it of links) {
-        if (!seen.has(it.url)) {
-          seen.add(it.url);
-          unique.push(it);
-        }
-      }
-
-      if (unique.length === 0) {
-        return json(
-          {
-            error:
-              "No downloadable links found (fdown returned no links; video may be private/age/region locked, or fdown blocked your server IP).",
-            developer: "Haseeb Sahil",
-            tg_channal: "@hsmodzofc2",
-          },
-          404
-        );
-      }
-
-      return json({
-        title,
-        thumbnail,
-        links: unique,
-        total_links: unique.length,
-        developer: "Haseeb Sahil",
-        tg_channal: "@hsmodzofc2",
-      });
+      return json({ error: "Not Found" }, 404);
     } catch (e) {
       return json(
         {
-          error: `Server error: ${String(e && e.message ? e.message : e)}`,
-          developer: "Haseeb Sahil",
-          tg_channal: "@hsmodzofc2",
+          status: "error",
+          success: false,
+          error: `Server error: ${String(e?.message || e)}`,
+          api_owner: "@ISmartCoder",
+          api_updates: "t.me/abirxdhackz",
         },
         500
       );
@@ -126,132 +26,25 @@ export default {
   },
 };
 
-/* ---------------- Helpers ---------------- */
+/* ---------------- Common helpers ---------------- */
+
+function corsHeaders() {
+  return {
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-headers": "Content-Type, User-Agent, Accept, X-Requested-With",
+  };
+}
+
+function corsPreflight() {
+  return new Response(null, { status: 204, headers: corsHeaders() });
+}
 
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj, null, 2), {
     status,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "access-control-allow-origin": "*",
-    },
+    headers: { "content-type": "application/json; charset=utf-8", ...corsHeaders() },
   });
-}
-
-function isFacebookUrl(u) {
-  try {
-    const host = (new URL(u).hostname || "").toLowerCase();
-    return (
-      host.includes("facebook.com") ||
-      host.includes("fb.watch") ||
-      host.includes("fb.com") ||
-      host.includes("m.facebook.com") ||
-      host.includes("mbasic.facebook.com")
-    );
-  } catch {
-    return false;
-  }
-}
-
-async function resolveFinalUrl(inputUrl, headers) {
-  // Use fetch redirect follow; final URL is in resp.url
-  const r = await fetch(inputUrl, { headers, redirect: "follow" });
-  return r.url || inputUrl;
-}
-
-function qualityFromText(t) {
-  const s = String(t || "").toLowerCase();
-  if (s.includes("hd") || s.includes("high")) return "HD";
-  if (s.includes("sd") || s.includes("normal") || s.includes("low")) return "SD";
-  if (s.includes("audio")) return "AUDIO";
-  return "Unknown";
-}
-
-function isJunkLink(href) {
-  const h = String(href || "").toLowerCase();
-
-  const junkDomains = [
-    "chrome.google.com",
-    "play.google.com",
-    "microsoft.com",
-    "addons.mozilla.org",
-    "opera.com",
-    "edge.microsoft.com",
-    "webstore",
-  ];
-  if (junkDomains.some((d) => h.includes(d))) return true;
-
-  const junkMarkers = ["doubleclick", "googlesyndication", "adsystem", "utm_", "affiliate"];
-  if (junkMarkers.some((m) => h.includes(m))) return true;
-
-  return false;
-}
-
-function isRealVideoLink(href) {
-  const h = String(href || "").toLowerCase();
-  if (h.includes("fbcdn.net")) return true;
-  if (h.includes("video_redirect")) return true;
-  if (h.includes("/download.php")) return true;
-  if (h.endsWith(".mp4") && h.includes("facebook")) return true;
-  return false;
-}
-
-/**
- * Very light HTML parsing using regex (works fine for fdown layout)
- * If fdown changes HTML heavily, you may need to adjust patterns.
- */
-function parseTitle(html) {
-  // <div class="lib-row lib-header">TITLE</div>
-  const m = html.match(/<div[^>]*class="[^"]*\blib-row\b[^"]*\blib-header\b[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
-  if (!m) return "Facebook Video";
-  const text = stripTags(m[1]).trim();
-  if (!text || text.toLowerCase() === "no video title") return "Facebook Video";
-  return text;
-}
-
-function parseThumbnail(html) {
-  // <img class="lib-img-show" src="...">
-  const m = html.match(/<img[^>]*class="[^"]*\blib-img-show\b[^"]*"[^>]*src="([^"]+)"/i);
-  if (!m) return null;
-  const src = (m[1] || "").trim();
-  if (!src) return null;
-  if (src.includes("no-thumbnail-fbdown.png")) return null;
-  return src;
-}
-
-function extractButtonLinks(html) {
-  // <a class="btn btn-download" href="...">HD / SD...</a>
-  const out = [];
-  const re = /<a[^>]*class="[^"]*\bbtn\b[^"]*\bbtn-download\b[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
-  let m;
-  while ((m = re.exec(html)) !== null) {
-    const href = (m[1] || "").trim();
-    const text = stripTags(m[2]).trim();
-
-    if (!href.startsWith("http")) continue;
-    if (isJunkLink(href)) continue;
-    if (!isRealVideoLink(href)) continue;
-
-    out.push({ quality: qualityFromText(text), url: href });
-  }
-  return out;
-}
-
-function extractAllVideoLinks(html) {
-  const out = [];
-  const re = /<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
-  let m;
-  while ((m = re.exec(html)) !== null) {
-    const href = (m[1] || "").trim();
-    const text = stripTags(m[2]).trim();
-
-    if (!href.startsWith("http")) continue;
-    if (isJunkLink(href)) continue;
-    if (!isRealVideoLink(href)) continue;
-
-    out.push({ quality: qualityFromText(text), url: href });
-  }
-  return out;
 }
 
 function stripTags(s) {
@@ -259,5 +52,505 @@ function stripTags(s) {
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
     .replace(/<\/?[^>]+>/g, " ")
-    .replace(/\s+/g, " ");
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function safeText(resp) {
+  try {
+    return await resp.text();
+  } catch {
+    return "";
+  }
+}
+
+/* =========================================================
+   ✅ Instagram: /insta/dl?url=
+   Logic mirrors insta.py: direct regex -> instsaves.pro -> fastdl.live
+   ========================================================= */
+
+async function handleInsta(urlObj) {
+  const input = (urlObj.searchParams.get("url") || "").trim();
+  if (!input) {
+    return json(
+      {
+        status: "error",
+        error: "Missing 'url' parameter",
+        api_owner: "@ISmartCoder",
+        api_updates: "t.me/abirxdhackz",
+      },
+      400
+    );
+  }
+
+  const mediaList = (await insta_directRegex(input)) ||
+    (await insta_instsaves(input)) ||
+    (await insta_fastdl(input));
+
+  if (!mediaList) {
+    return json(
+      {
+        status: "error",
+        error: "Media not found or unsupported",
+        api_owner: "@ISmartCoder",
+        api_updates: "t.me/abirxdhackz",
+      },
+      404
+    );
+  }
+
+  return json({
+    status: "success",
+    media_count: mediaList.length,
+    results: mediaList,
+    api_owner: "@ISmartCoder",
+    api_updates: "t.me/abirxdhackz",
+  });
+}
+
+function instaHeaders() {
+  // Similar UA/headers to your python
+  return {
+    accept:
+      "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "accept-language": "en-US,en;q=0.9",
+    "user-agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+  };
+}
+
+// Method 1: direct HTML regex scrape (mp4 + thumbnails)
+async function insta_directRegex(instaUrl) {
+  try {
+    const resp = await fetch(instaUrl, { headers: instaHeaders(), redirect: "follow" });
+    if (!resp.ok) return null;
+
+    const html = await resp.text();
+    const videoUrls = new Set();
+    const thumbnails = new Set();
+
+    // "url":"https:\/\/...mp4..."
+    const videoRe = /"url"\s*:\s*"((?:https?:\\?\/\\?\/)[^"]*\.mp4[^"]*)"/gi;
+    let m;
+    while ((m = videoRe.exec(html)) !== null) {
+      const clean = m[1].replace(/\\\//g, "/").replace(/\\u0026/g, "&");
+      videoUrls.add(clean);
+    }
+
+    // "candidates":[{"url":"..."}]
+    const imgRe = /"candidates"\s*:\s*\[\s*\{\s*"url"\s*:\s*"([^"]+)"/gi;
+    while ((m = imgRe.exec(html)) !== null) {
+      const clean = m[1].replace(/\\\//g, "/").replace(/\\u0026/g, "&");
+      thumbnails.add(clean);
+    }
+
+    // fallback "display_url"
+    if (thumbnails.size === 0) {
+      const dRe = /"display_url"\s*:\s*"([^"]+)"/gi;
+      while ((m = dRe.exec(html)) !== null) {
+        const clean = m[1].replace(/\\\//g, "/").replace(/\\u0026/g, "&");
+        thumbnails.add(clean);
+      }
+    }
+
+    if (videoUrls.size === 0 && thumbnails.size === 0) return null;
+
+    const thumbList = Array.from(thumbnails);
+    const thumbnail = thumbList.length ? thumbList[0] : null;
+
+    const results = [];
+    let videoCount = 1;
+    let imageCount = 1;
+
+    for (const v of videoUrls) {
+      results.push({ label: `video${videoCount++}`, thumbnail, download: v });
+    }
+
+    for (const img of thumbnails) {
+      if (!videoUrls.has(img)) {
+        results.push({ label: `image${imageCount++}`, thumbnail, download: img });
+      }
+    }
+
+    return results.length ? results : null;
+  } catch {
+    return null;
+  }
+}
+
+// Method 2: instsaves.pro API (returns HTML inside JSON; parse .visolix-media-box)
+async function insta_instsaves(instaUrl) {
+  try {
+    const apiUrl = "https://instsaves.pro/wp-json/visolix/api/download";
+    const payload = { url: instaUrl, format: "", captcha_response: null };
+
+    const resp = await fetch(apiUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "user-agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!resp.ok) return null;
+    const data = await resp.json().catch(() => null);
+    if (!data || !data.status || !data.data) return null;
+
+    const html = String(data.data);
+
+    // Rough parse: find each "visolix-media-box" block
+    const blocks = html.match(/<div[^>]*class="[^"]*\bvisolix-media-box\b[^"]*"[\s\S]*?<\/div>\s*<\/div>/gi) || [];
+    if (blocks.length === 0) return null;
+
+    const results = [];
+    let imageCount = 1;
+    let videoCount = 1;
+
+    for (const b of blocks) {
+      // preview image src from first <img ... src="...">
+      const imgM = b.match(/<img[^>]*src="([^"]+)"/i);
+      const preview = imgM ? imgM[1] : null;
+
+      // download link <a class="visolix-download-media" href="...">TEXT</a>
+      const dlM = b.match(/<a[^>]*class="[^"]*\bvisolix-download-media\b[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
+      if (!dlM) continue;
+
+      const downloadUrl = dlM[1];
+      const txt = stripTags(dlM[2]).toLowerCase();
+
+      let label = `media${results.length + 1}`;
+      if (txt.includes("video") || txt.includes("igtv") || txt.includes("reel")) label = `video${videoCount++}`;
+      else if (txt.includes("image") || txt.includes("photo")) label = `image${imageCount++}`;
+      else if (txt.includes("story")) label = `story_video${videoCount++}`;
+
+      results.push({ label, thumbnail: preview, download: downloadUrl });
+    }
+
+    return results.length ? results : null;
+  } catch {
+    return null;
+  }
+}
+
+// Method 3: fastdl.live API
+async function insta_fastdl(instaUrl) {
+  try {
+    const apiUrl = "https://fastdl.live/api/search";
+    const resp = await fetch(apiUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "user-agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+      },
+      body: JSON.stringify({ url: instaUrl }),
+    });
+
+    if (!resp.ok) return null;
+    const data = await resp.json().catch(() => null);
+    if (!data || !data.success || !Array.isArray(data.result)) return null;
+
+    const results = [];
+    let imageCount = 1;
+    let videoCount = 1;
+
+    for (const item of data.result) {
+      const t = String(item.type || "").toLowerCase();
+      const label = (t.includes("video") || t.includes("reel")) ? `video${videoCount++}` : `image${imageCount++}`;
+      results.push({
+        label,
+        thumbnail: item.thumbnail || null,
+        download: item.downloadLink || null,
+      });
+    }
+
+    return results.filter(x => x.download).length ? results.filter(x => x.download) : null;
+  } catch {
+    return null;
+  }
+}
+
+/* =========================================================
+   ✅ Pinterest: /pnt/dl?url=
+   Logic mirrors pnt.py using savepin.app
+   ========================================================= */
+
+async function handlePinterest(urlObj) {
+  const input = (urlObj.searchParams.get("url") || "").trim();
+  if (!input) {
+    return json(
+      {
+        status: "error",
+        input_url: input,
+        message: "No URL provided",
+        api_owner: "@ISmartCoder",
+        api_updates: "t.me/abirxdhackz",
+      },
+      400
+    );
+  }
+
+  const base = new URL("https://www.savepin.app/download.php");
+  base.searchParams.set("url", input);
+  base.searchParams.set("lang", "en");
+  base.searchParams.set("type", "redirect");
+
+  const headers = {
+    "user-agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    referer: "https://www.savepin.app/",
+  };
+
+  const resp = await fetch(base.toString(), { headers, redirect: "follow" });
+  const ct = (resp.headers.get("content-type") || "").toLowerCase();
+  const html = await safeText(resp);
+
+  if (!resp.ok) {
+    return json(
+      {
+        status: "error",
+        input_url: input,
+        message: `Failed to fetch media: HTTP ${resp.status}`,
+        html_snippet: html.slice(0, 500),
+        api_owner: "@ISmartCoder",
+        api_updates: "t.me/abirxdhackz",
+      },
+      500
+    );
+  }
+
+  if (ct.includes("application/json")) {
+    return json(
+      {
+        status: "error",
+        input_url: input,
+        message: "Unexpected JSON response from savepin.app",
+        api_owner: "@ISmartCoder",
+        api_updates: "t.me/abirxdhackz",
+      },
+      500
+    );
+  }
+
+  // Title <h1>...</h1>
+  let title = "Unknown";
+  const h1 = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+  if (h1) title = stripTags(h1[1]) || "Unknown";
+
+  // Parse table rows: <table border="1"> ... <tr><td>quality</td><td>format</td><td><a class="button is-success is-small" href="force-save.php?url=...."></a>
+  const media = [];
+  const rowRe = /<tr[^>]*>\s*<td[^>]*>([\s\S]*?)<\/td>\s*<td[^>]*>([\s\S]*?)<\/td>\s*<td[^>]*>[\s\S]*?<a[^>]*class="[^"]*\bbutton\b[^"]*\bis-success\b[^"]*\bis-small\b[^"]*"[^>]*href="([^"]+)"[\s\S]*?<\/a>[\s\S]*?<\/td>\s*<\/tr>/gi;
+
+  let m;
+  while ((m = rowRe.exec(html)) !== null) {
+    const quality = stripTags(m[1]);
+    const formatType = stripTags(m[2]).toLowerCase();
+    const href = m[3];
+
+    if (!href) continue;
+    if (!href.startsWith("force-save.php?url=")) continue;
+
+    const raw = href.replace("force-save.php?url=", "");
+    const mediaUrl = decodeURIComponent(raw);
+
+    media.push({
+      quality,
+      url: mediaUrl,
+      type: formatType === "jpg" ? "image/jpeg" : "video/mp4",
+    });
+  }
+
+  const result = {
+    status: media.length ? "success" : "error",
+    input_url: input,
+    title,
+    media,
+    api_owner: "@ISmartCoder",
+    api_updates: "t.me/abirxdhackz",
+  };
+
+  if (!media.length) {
+    result.message = "No media found for the provided URL";
+    result.html_snippet = html.slice(0, 500);
+  }
+
+  return json(result);
+}
+
+/* =========================================================
+   ✅ TikTok: /tik/dl?url=
+   Logic mirrors tik.py using tikdownloader.io -> snapcdn links + filename decode
+   ========================================================= */
+
+const TIK_API_URL = "https://tikdownloader.io/api/ajaxSearch";
+const TIK_HEADERS = {
+  "user-agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+  "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+  accept: "application/json, text/javascript, */*; q=0.01",
+  "x-requested-with": "XMLHttpRequest",
+  referer: "https://tikdownloader.io/",
+  origin: "https://tikdownloader.io",
+};
+
+async function handleTikTok(urlObj) {
+  let input = normalizeTikTokUrl(urlObj.searchParams.get("url") || "");
+  input = await resolveRedirectTikTok(input);
+
+  if (!input || !isTikTokUrl(input)) {
+    return json(
+      {
+        success: false,
+        error: "Invalid or missing TikTok URL",
+        api_owner: "@ISmartCoder",
+        api_updates: "t.me/abirxdhackz",
+      },
+      400
+    );
+  }
+
+  const htmlContent = await fetchTikTokHtml(input);
+  if (htmlContent.error) {
+    const code = htmlContent.error.toLowerCase().includes("timeout") ? 504 : 500;
+    return json(
+      {
+        success: false,
+        error: htmlContent.error,
+        api_owner: "@ISmartCoder",
+        api_updates: "t.me/abirxdhackz",
+      },
+      code
+    );
+  }
+
+  // Extract snapcdn links
+  const links = [];
+  const fileNames = [];
+  const re = /href="(https:\/\/dl\.snapcdn\.app\/get\?token=[^"]+)"/gi;
+
+  let m;
+  while ((m = re.exec(htmlContent.data)) !== null) {
+    const link = m[1];
+    links.push(link);
+
+    const filename = decodeFilenameFromToken(link) || sanitizeFilename(`TikTok_${input.split("/").filter(Boolean).pop() || "video"}`);
+    fileNames.push(filename);
+  }
+
+  if (!links.length) {
+    return json(
+      {
+        success: false,
+        error: "No downloadable links found",
+        api_owner: "@ISmartCoder",
+        api_updates: "t.me/abirxdhackz",
+      },
+      404
+    );
+  }
+
+  const result = links.map((l, i) => ({ url: l, filename: fileNames[i] }));
+  return json({
+    success: true,
+    links: result,
+    api_owner: "@ISmartCoder",
+    api_updates: "t.me/abirxdhackz",
+  });
+}
+
+function normalizeTikTokUrl(raw) {
+  raw = String(raw || "").trim();
+  if (!raw) return "";
+  if (raw.startsWith("//")) raw = "https:" + raw;
+  if (!/^https?:\/\//i.test(raw)) raw = "https://" + raw;
+  return raw;
+}
+
+async function resolveRedirectTikTok(u) {
+  try {
+    const r = await fetch(u, {
+      headers: { "user-agent": TIK_HEADERS["user-agent"] },
+      redirect: "follow",
+    });
+    return r.url || u;
+  } catch {
+    return u;
+  }
+}
+
+function isTikTokUrl(u) {
+  try {
+    const host = new URL(u).hostname.toLowerCase();
+    return host.includes("tiktok.com") || host.includes("vt.tiktok.com") || host.includes("vm.tiktok.com");
+  } catch {
+    return false;
+  }
+}
+
+function sanitizeFilename(filename) {
+  filename = String(filename || "").split("?")[0];
+  const invalid = '<>:"/\\|?*';
+  for (const ch of invalid) filename = filename.split(ch).join("_");
+  filename = filename.replace(/_+/g, "_").replace(/^_+|_+$/g, "");
+  if (!/\.(mp4|mp3)$/i.test(filename)) filename += ".mp4";
+  return filename || "tiktok.mp4";
+}
+
+async function fetchTikTokHtml(tiktokUrl) {
+  try {
+    const body = new URLSearchParams({ q: tiktokUrl, lang: "en" });
+
+    const resp = await fetch(TIK_API_URL, {
+      method: "POST",
+      headers: TIK_HEADERS,
+      body,
+    });
+
+    if (!resp.ok) {
+      return { error: `API request failed: HTTP ${resp.status}`, data: null };
+    }
+
+    const data = await resp.json().catch(() => null);
+    if (!data || data.status !== "ok") return { error: "API returned invalid status", data: null };
+    if (!data.data) return { error: "No data found in API response", data: null };
+
+    return { error: null, data: String(data.data) };
+  } catch (e) {
+    return { error: `Unexpected error: ${String(e?.message || e)}`, data: null };
+  }
+}
+
+function decodeFilenameFromToken(snapUrl) {
+  try {
+    const u = new URL(snapUrl);
+    const token = u.searchParams.get("token");
+    if (!token) return null;
+
+    const parts = token.split(".");
+    if (parts.length < 2) return null;
+
+    const payload = parts[1];
+    const jsonStr = base64UrlDecode(payload);
+    const obj = JSON.parse(jsonStr);
+
+    const fn = obj?.filename ? String(obj.filename) : "";
+    if (!fn) return null;
+    return sanitizeFilename(fn);
+  } catch {
+    return null;
+  }
+}
+
+function base64UrlDecode(b64url) {
+  let s = String(b64url || "").replace(/-/g, "+").replace(/_/g, "/");
+  while (s.length % 4) s += "=";
+
+  // atob expects binary string
+  const bin = atob(s);
+  // decode as UTF-8
+  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  return new TextDecoder("utf-8").decode(bytes);
 }
