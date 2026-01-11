@@ -1,168 +1,199 @@
-addEventListener("fetch", (event) => {
-  event.respondWith(handleRequest(event.request));
-});
+/**
+ * Instagram Downloader API - Cloudflare Worker
+ * Ported from FastAPI to JavaScript
+ */
 
-const HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-  "Content-Type": "application/json",
-  "Cache-Control": "public, max-age=300",
-  "X-Content-Type-Options": "nosniff",
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    
+    // Sirf /insta/dl path ko handle karne ke liye
+    if (url.pathname === "/insta/dl") {
+      return await handleDownload(url);
+    }
+
+    return new Response(JSON.stringify({ error: "Route not found. Use /insta/dl?url=..." }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
 };
 
-function respond(data, status = 200, pretty = false) {
-  const body = pretty ? JSON.stringify(data, null, 4) : JSON.stringify(data);
-  return new Response(body, {
-    status,
-    headers: HEADERS,
-  });
-}
+const FOOTER = {
+  api_owner: "@ISmartCoder",
+  api_updates: "t.me/abirxdhackz"
+};
 
-function usageResponse(url, note) {
-  return {
-    status: true,
-    message: note || "API is working. Use query parameter `num`.",
-    how_to_use: {
-      format: "GET /?num=NUMBER",
-      examples: [
-        `${url.origin}/?num=03068060398`,
-        `${url.origin}/?num=923068060398`,
-        `${url.origin}/?num=+923068060398`,
-      ],
-      accepted_formats: [
-        "030xxxxxxxx (11 digits)",
-        "92xxxxxxxxxx (12 digits)",
-        "3xxxxxxxxx (10 digits)",
-      ],
-      note: "Only Pakistani numbers supported.",
-    },
-    developer: "Haseeb Sahil",
-    channel: "@hsmodzofc2",
-  };
-}
+const HEADERS = {
+  'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+  'accept-language': 'en-US,en;q=0.9',
+  'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
+};
 
-function normalizeNumber(input) {
-  // keep digits only (and optional leading +)
-  const raw = String(input || "").trim();
-  if (!raw) return null;
+async function handleDownload(urlParams) {
+  const targetUrl = urlParams.searchParams.get("url");
 
-  const digits = raw.replace(/[^\d]/g, "");
-
-  // Pakistan formats:
-  // 030xxxxxxxx (11 digits) => +92 + 3xxxxxxxxx
-  if (digits.startsWith("03") && digits.length === 11) {
-    return "+92" + digits.slice(1);
-  }
-
-  // 92xxxxxxxxxx (12 digits) => +92xxxxxxxxxx
-  if (digits.startsWith("92") && digits.length === 12) {
-    return "+" + digits;
-  }
-
-  // 3xxxxxxxxx (10 digits) => +923xxxxxxxxx
-  if (digits.startsWith("3") && digits.length === 10) {
-    return "+92" + digits;
-  }
-
-  return null;
-}
-
-async function handleRequest(request) {
-  // CORS preflight
-  if (request.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: HEADERS });
-  }
-
-  if (request.method !== "GET") {
-    return respond(
-      {
-        status: false,
-        message: "Only GET method allowed",
-        developer: "Haseeb Sahil",
-        channel: "@hsmodzofc2",
-      },
-      405
-    );
-  }
-
-  const url = new URL(request.url);
-
-  // If no num -> show usage guide
-  const originalInput = url.searchParams.get("num");
-  if (!originalInput) {
-    return respond(usageResponse(url), 200, true);
-  }
-
-  const normalized = normalizeNumber(originalInput);
-
-  // If invalid -> show usage guide (no "Invalid Pakistani number" response)
-  if (!normalized) {
-    return respond(
-      usageResponse(url, "Invalid number. Please use correct format."),
-      200,
-      true
-    );
+  if (!targetUrl) {
+    return new Response(JSON.stringify({ status: "error", error: "Missing 'url' parameter", ...FOOTER }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" }
+    });
   }
 
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
-
-    // CallApp expects URL-encoded plus sign
-    const cpn = normalized.replace("+", "%2B");
-
-    const apiUrl =
-      "https://s.callapp.com/callapp-server/csrch" +
-      `?cpn=${cpn}` +
-      "&myp=fb.877409278562861&ibs=0&cid=0" +
-      "&tk=0080528975&cvc=2239";
-
-    const res = await fetch(apiUrl, {
-      method: "GET",
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Linux; Android 15; wv)",
-        "Accept-Encoding": "identity",
-        Accept: "application/json",
-      },
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeout);
-
-    if (!res.ok) throw new Error("Upstream API error");
-
-    const data = await res.json();
-
-    // add branding + normalized
-    if (data && typeof data === "object" && !Array.isArray(data)) {
-      data.developer = "Haseeb Sahil";
-      data.channel = "@hsmodzofc2";
-      data.source = "hidden";
-      data.normalized = normalized;
-      return respond(data, 200, true);
+    // Method 1: Direct Regex Scrape
+    let results = await fetchDirectRegex(targetUrl);
+    
+    // Method 2: Instsaves.pro if Method 1 fails
+    if (!results) {
+      console.log("Direct regex failed, trying instsaves.pro");
+      results = await fetchInstasaves(targetUrl);
     }
 
-    return respond(
-      {
-        result: data,
-        developer: "Haseeb Sahil",
-        channel: "@hsmodzofc2",
-        source: "hidden",
-        normalized: normalized,
-      },
-      200,
-      true
-    );
-  } catch (err) {
-    return respond(
-      {
-        status: false,
-        message: err && err.name === "AbortError" ? "Request timeout" : "Internal server error",
-        developer: "Haseeb Sahil",
-        channel: "@hsmodzofc2",
-      },
-      500
-    );
+    // Method 3: FastDL if others fail
+    if (!results) {
+      console.log("Instsaves failed, trying fastdl.live");
+      results = await fetchFastDL(targetUrl);
+    }
+
+    if (!results || results.length === 0) {
+      return new Response(JSON.stringify({ status: "error", error: "Media not found or unsupported", ...FOOTER }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    return new Response(JSON.stringify({
+      status: "success",
+      media_count: results.length,
+      results: results,
+      ...FOOTER
+    }), {
+      headers: { 
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*" 
+      }
+    });
+
+  } catch (e) {
+    return new Response(JSON.stringify({ status: "error", error: `Server error: ${e.message}`, ...FOOTER }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" }
+    });
   }
+}
+
+// --- Method 1: Direct Regex ---
+async function fetchDirectRegex(instaUrl) {
+  try {
+    const response = await fetch(instaUrl, { headers: HEADERS });
+    if (!response.ok) return null;
+    const html = await response.text();
+
+    const videoUrls = new Set();
+    const thumbnails = new Set();
+
+    // Video Regex
+    const videoPattern = /"url"\s*:\s*"(https?:\\?\/\\?\/[^"]*\.mp4[^"]*)"/gi;
+    let match;
+    while ((match = videoPattern.exec(html)) !== null) {
+      videoUrls.add(match[1].replace(/\\/g, '').replace(/u0026/g, '&'));
+    }
+
+    // Image Regex
+    const imgPattern = /"candidates"\s*:\s*\[\s*\{\s*"url"\s*:\s*"([^"]+)"/gi;
+    while ((match = imgPattern.exec(html)) !== null) {
+      thumbnails.add(match[1].replace(/\\/g, '').replace(/u0026/g, '&'));
+    }
+
+    if (videoUrls.size === 0 && thumbnails.size === 0) return null;
+
+    const results = [];
+    const thumbArray = Array.from(thumbnails);
+    const mainThumb = thumbArray[0] || null;
+
+    let vCount = 1;
+    videoUrls.forEach(v => {
+      results.append({ label: `video${vCount++}`, thumbnail: mainThumb, download: v });
+    });
+
+    let iCount = 1;
+    thumbnails.forEach(img => {
+      if (!videoUrls.has(img)) {
+        results.push({ label: `image${iCount++}`, thumbnail: mainThumb, download: img });
+      }
+    });
+
+    return results.length > 0 ? results : null;
+  } catch (e) { return null; }
+}
+
+// --- Method 2: Instsaves.pro ---
+async function fetchInstasaves(instaUrl) {
+  try {
+    const apiUrl = "https://instsaves.pro/wp-json/visolix/api/download";
+    const response = await fetch(apiUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...HEADERS },
+      body: JSON.stringify({ url: instaUrl, format: "", captcha_response: null })
+    });
+
+    const data = await response.json();
+    if (!data.status || !data.data) return null;
+
+    const htmlContent = data.data;
+    const results = [];
+    
+    // Regex to match visolix-media-box content
+    const boxPattern = /<div class="visolix-media-box">([\s\S]*?)<\/div>/gi;
+    let boxMatch;
+    let vCount = 1, iCount = 1;
+
+    while ((boxMatch = boxPattern.exec(htmlContent)) !== null) {
+      const content = boxMatch[1];
+      const imgMatch = content.match(/<img[^>]+src="([^"]+)"/i);
+      const dlMatch = content.match(/<a[^>]+href="([^"]+)"[^>]+class="visolix-download-media"/i);
+      const textMatch = content.match(/visolix-download-media[^>]*>([\s\S]*?)<\/a>/i);
+
+      if (dlMatch) {
+        const dUrl = dlMatch[1];
+        const dText = (textMatch ? textMatch[1] : "").toLowerCase();
+        let label = "media";
+
+        if (dText.includes("video") || dText.includes("reel")) label = `video${vCount++}`;
+        else if (dText.includes("image") || dText.includes("photo")) label = `image${iCount++}`;
+
+        results.push({
+          label: label,
+          thumbnail: imgMatch ? imgMatch[1] : null,
+          download: dUrl
+        });
+      }
+    }
+    return results.length > 0 ? results : null;
+  } catch (e) { return null; }
+}
+
+// --- Method 3: FastDL.live ---
+async function fetchFastDL(instaUrl) {
+  try {
+    const response = await fetch("https://fastdl.live/api/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...HEADERS },
+      body: JSON.stringify({ url: instaUrl })
+    });
+
+    const data = await response.json();
+    if (!data.success || !data.result) return null;
+
+    let vCount = 1, iCount = 1;
+    return data.result.map(item => {
+      const type = (item.type || "").toLowerCase();
+      return {
+        label: (type.includes("video") || type.includes("reel")) ? `video${vCount++}` : `image${iCount++}`,
+        thumbnail: item.thumbnail,
+        download: item.downloadLink
+      };
+    });
+  } catch (e) { return null; }
 }
