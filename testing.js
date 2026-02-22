@@ -20,9 +20,8 @@ export default {
       );
     }
 
-    if (
-      !["facebook.com", "fb.watch", "fb.com"].some((x) => fbUrl.includes(x))
-    ) {
+    // Basic allowlist for facebook URLs
+    if (!["facebook.com", "fb.watch", "fb.com"].some((x) => fbUrl.includes(x))) {
       return json(
         {
           error: "Only Facebook URLs are supported!",
@@ -50,7 +49,6 @@ export default {
           Referer: "https://fdown.net/",
         },
         body: form.toString(),
-        // Cloudflare Workers doesn't support "timeout" option; fetch has platform limits.
       });
 
       if (!resp.ok) {
@@ -66,7 +64,7 @@ export default {
 
       const html = await resp.text();
 
-      // --- Parse title (div.lib-row.lib-header) ---
+      // ---------------- Title ----------------
       let title = "Facebook Video";
       {
         const m = html.match(
@@ -78,20 +76,29 @@ export default {
         }
       }
 
-      // --- Parse thumbnail (img.lib-img-show src) ---
+      // ---------------- Thumbnail (strong fallback) ----------------
       let thumbnail = null;
+
+      // 1) lib-img-show src/data-src
       {
-        const m = html.match(
-          /<img[^>]*class=["'][^"']*\blib-img-show\b[^"']*["'][^>]*src=["']([^"']+)["'][^>]*>/i
+        let m = html.match(
+          /<img[^>]*class=["'][^"']*\blib-img-show\b[^"']*["'][^>]*(?:src|data-src)=["']([^"']+)["'][^>]*>/i
         );
-        if (m) {
-          const src = decodeHtml(m[1]);
-          if (src && !src.includes("no-thumbnail-fbdown.png")) thumbnail = src;
-        }
+        if (m) thumbnail = decodeHtml(m[1]);
       }
 
-      // --- Parse download links ---
-      // Grab all <a ... href="...">TEXT</a>
+      // 2) og:image meta fallback
+      if (!thumbnail) {
+        const m = html.match(
+          /<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["'][^>]*>/i
+        );
+        if (m) thumbnail = decodeHtml(m[1]);
+      }
+
+      // Remove known "no-thumbnail"
+      if (thumbnail && thumbnail.includes("no-thumbnail")) thumbnail = null;
+
+      // ---------------- Download links (VIDEO ONLY) ----------------
       const links = [];
       const anchorRe =
         /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
@@ -104,25 +111,30 @@ export default {
         const hrefLower = href.toLowerCase();
         const textLower = text.toLowerCase();
 
-        if (
-          (hrefLower.includes("download") || hrefLower.includes("fbcdn.net")) &&
-          href.startsWith("http")
-        ) {
-          let quality = "Unknown";
-          if (textLower.includes("hd") || textLower.includes("high")) {
-            quality = "HD";
-          } else if (
-            textLower.includes("sd") ||
-            textLower.includes("normal") ||
-            textLower.includes("low")
-          ) {
-            quality = "SD";
-          } else if (text) {
-            quality = text;
-          }
+        // ✅ Only keep actual video links (fbcdn + mp4/m4v or video)
+        const isVideo =
+          href.startsWith("http") &&
+          hrefLower.includes("fbcdn.net") &&
+          (hrefLower.includes(".mp4") ||
+            hrefLower.includes(".m4v") ||
+            hrefLower.includes("video"));
 
-          links.push({ quality, url: href });
+        if (!isVideo) continue;
+
+        let quality = "Unknown";
+        if (textLower.includes("hd") || textLower.includes("high")) {
+          quality = "HD";
+        } else if (
+          textLower.includes("sd") ||
+          textLower.includes("normal") ||
+          textLower.includes("low")
+        ) {
+          quality = "SD";
+        } else if (text) {
+          quality = text;
         }
+
+        links.push({ quality, url: href });
       }
 
       // Dedupe by URL
@@ -134,6 +146,12 @@ export default {
           uniqueLinks.push(item);
         }
       }
+
+      // Prefer HD first (optional but nice)
+      uniqueLinks.sort((a, b) => {
+        const rank = (q) => (q === "HD" ? 0 : q === "SD" ? 1 : 2);
+        return rank(a.quality) - rank(b.quality);
+      });
 
       if (!uniqueLinks.length) {
         return json(
