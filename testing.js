@@ -1,212 +1,258 @@
+// Cloudflare Worker for Facebook Video Downloader
+// Deploy directly to Cloudflare Workers
+
 export default {
   async fetch(request, env, ctx) {
-    const urlObj = new URL(request.url);
-
-    // Only handle: /fb/dl
-    if (urlObj.pathname !== "/fb/dl") {
-      return json({ error: "Not Found" }, 404);
+    // Handle CORS preflight
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type',
+        },
+      });
     }
 
-    const fbUrl = (urlObj.searchParams.get("url") || "").trim();
-
-    if (!fbUrl) {
-      return json(
-        {
-          error: "Missing 'url' query parameter",
-          api_owner: "@ISmartCoder",
-          api_updates: "t.me/abirxdhackz",
+    // Only allow GET requests
+    if (request.method !== 'GET') {
+      return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+        status: 405,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
         },
-        400
-      );
-    }
-
-    // Basic allowlist for facebook URLs
-    if (!["facebook.com", "fb.watch", "fb.com"].some((x) => fbUrl.includes(x))) {
-      return json(
-        {
-          error: "Only Facebook URLs are supported!",
-          api_owner: "@ISmartCoder",
-          api_updates: "t.me/abirxdhackz",
-        },
-        400
-      );
+      });
     }
 
     try {
-      // Form payload like Python: {"URLz": url}
-      const form = new URLSearchParams();
-      form.set("URLz", fbUrl);
+      // Parse URL and get query parameters
+      const url = new URL(request.url);
+      const videoUrl = url.searchParams.get('url');
 
-      const resp = await fetch("https://fdown.net/download.php", {
-        method: "POST",
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Mobile Safari/537.36",
-          Accept:
-            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-          "Content-Type": "application/x-www-form-urlencoded",
-          Origin: "https://fdown.net",
-          Referer: "https://fdown.net/",
-        },
-        body: form.toString(),
-      });
-
-      if (!resp.ok) {
-        return json(
+      // Check if URL parameter exists
+      if (!videoUrl) {
+        return new Response(
+          JSON.stringify({
+            error: "Missing 'url' query parameter",
+            api_owner: '@ISmartCoder',
+            api_updates: 't.me/abirxdhackz',
+          }),
           {
-            error: "Third-party service temporarily down",
-            api_owner: "@ISmartCoder",
-            api_updates: "t.me/abirxdhackz",
-          },
-          502
+            status: 400,
+            headers: {
+              'Content-Type': 'application/json',
+              'Access-Control-Allow-Origin': '*',
+            },
+          }
         );
       }
 
-      const html = await resp.text();
-
-      // ---------------- Title ----------------
-      let title = "Facebook Video";
-      {
-        const m = html.match(
-          /<div[^>]*class=["'][^"']*\blib-row\b[^"']*\blib-header\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i
-        );
-        if (m) {
-          const raw = stripTags(m[1]).trim();
-          if (raw && raw !== "No video title") title = decodeHtml(raw);
-        }
-      }
-
-      // ---------------- Thumbnail (strong fallback) ----------------
-      let thumbnail = null;
-
-      // 1) lib-img-show src/data-src
-      {
-        let m = html.match(
-          /<img[^>]*class=["'][^"']*\blib-img-show\b[^"']*["'][^>]*(?:src|data-src)=["']([^"']+)["'][^>]*>/i
-        );
-        if (m) thumbnail = decodeHtml(m[1]);
-      }
-
-      // 2) og:image meta fallback
-      if (!thumbnail) {
-        const m = html.match(
-          /<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["'][^>]*>/i
-        );
-        if (m) thumbnail = decodeHtml(m[1]);
-      }
-
-      // Remove known "no-thumbnail"
-      if (thumbnail && thumbnail.includes("no-thumbnail")) thumbnail = null;
-
-      // ---------------- Download links (VIDEO ONLY) ----------------
-      const links = [];
-      const anchorRe =
-        /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
-
-      let match;
-      while ((match = anchorRe.exec(html)) !== null) {
-        const href = decodeHtml(match[1] || "").trim();
-        const text = decodeHtml(stripTags(match[2] || "")).trim();
-
-        const hrefLower = href.toLowerCase();
-        const textLower = text.toLowerCase();
-
-        // ✅ Only keep actual video links (fbcdn + mp4/m4v or video)
-        const isVideo =
-          href.startsWith("http") &&
-          hrefLower.includes("fbcdn.net") &&
-          (hrefLower.includes(".mp4") ||
-            hrefLower.includes(".m4v") ||
-            hrefLower.includes("video"));
-
-        if (!isVideo) continue;
-
-        let quality = "Unknown";
-        if (textLower.includes("hd") || textLower.includes("high")) {
-          quality = "HD";
-        } else if (
-          textLower.includes("sd") ||
-          textLower.includes("normal") ||
-          textLower.includes("low")
-        ) {
-          quality = "SD";
-        } else if (text) {
-          quality = text;
-        }
-
-        links.push({ quality, url: href });
-      }
-
-      // Dedupe by URL
-      const seen = new Set();
-      const uniqueLinks = [];
-      for (const item of links) {
-        if (!seen.has(item.url)) {
-          seen.add(item.url);
-          uniqueLinks.push(item);
-        }
-      }
-
-      // Prefer HD first (optional but nice)
-      uniqueLinks.sort((a, b) => {
-        const rank = (q) => (q === "HD" ? 0 : q === "SD" ? 1 : 2);
-        return rank(a.quality) - rank(b.quality);
-      });
-
-      if (!uniqueLinks.length) {
-        return json(
+      // Validate Facebook URL
+      if (
+        !videoUrl.includes('facebook.com') &&
+        !videoUrl.includes('fb.watch') &&
+        !videoUrl.includes('fb.com')
+      ) {
+        return new Response(
+          JSON.stringify({
+            error: 'Only Facebook URLs are supported!',
+            api_owner: '@ISmartCoder',
+            api_updates: 't.me/abirxdhackz',
+          }),
           {
-            error: "No downloadable links found",
-            api_owner: "@ISmartCoder",
-            api_updates: "t.me/abirxdhackz",
-          },
-          404
+            status: 400,
+            headers: {
+              'Content-Type': 'application/json',
+              'Access-Control-Allow-Origin': '*',
+            },
+          }
         );
       }
 
-      return json({
-        title,
-        thumbnail,
-        links: uniqueLinks,
-        total_links: uniqueLinks.length,
-        api_owner: "@ISmartCoder",
-        api_updates: "t.me/abirxdhackz",
+      // Prepare headers for fdown.net request
+      const headers = {
+        'User-Agent':
+          'Mozilla/5.0 (Linux; Android 15; V2434 Build/AP3A.240905.015.A2_NN_V000L1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.7499.35 Mobile Safari/537.36',
+        Accept:
+          'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Cache-Control': 'max-age=0',
+        'sec-ch-ua': '"Android WebView";v="143", "Chromium";v="143", "Not A(Brand)";v="24"',
+        'sec-ch-ua-mobile': '?1',
+        'sec-ch-ua-platform': '"Android"',
+        Origin: 'https://fdown.net',
+        'Upgrade-Insecure-Requests': '1',
+        'X-Requested-With': 'mark.via.gp',
+        'sec-fetch-site': 'same-origin',
+        'sec-fetch-mode': 'navigate',
+        'sec-fetch-user': '?1',
+        'sec-fetch-dest': 'document',
+        Referer: 'https://fdown.net/',
+        'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
+        priority: 'u=0, i',
+      };
+
+      // Create form data for POST request
+      const formData = new FormData();
+      formData.append('URLz', videoUrl.trim());
+
+      // Make request to fdown.net
+      const response = await fetch('https://fdown.net/download.php', {
+        method: 'POST',
+        headers: headers,
+        body: formData,
       });
-    } catch (e) {
-      return json(
+
+      if (!response.ok) {
+        return new Response(
+          JSON.stringify({
+            error: 'Third-party service temporarily down',
+            api_owner: '@ISmartCoder',
+            api_updates: 't.me/abirxdhackz',
+          }),
+          {
+            status: 502,
+            headers: {
+              'Content-Type': 'application/json',
+              'Access-Control-Allow-Origin': '*',
+            },
+          }
+        );
+      }
+
+      // Get response text
+      const html = await response.text();
+
+      // Parse HTML and extract video information
+      const videoInfo = extractVideoInfo(html);
+
+      if (!videoInfo.links || videoInfo.links.length === 0) {
+        return new Response(
+          JSON.stringify({
+            error: 'No downloadable links found',
+            api_owner: '@ISmartCoder',
+            api_updates: 't.me/abirxdhackz',
+          }),
+          {
+            status: 404,
+            headers: {
+              'Content-Type': 'application/json',
+              'Access-Control-Allow-Origin': '*',
+            },
+          }
+        );
+      }
+
+      // Return successful response
+      return new Response(
+        JSON.stringify({
+          title: videoInfo.title,
+          thumbnail: videoInfo.thumbnail,
+          links: videoInfo.links,
+          total_links: videoInfo.links.length,
+          api_owner: '@ISmartCoder',
+          api_updates: 't.me/abirxdhackz',
+        }),
         {
-          error: `Server error: ${String(e && e.message ? e.message : e)}`,
-          api_owner: "@ISmartCoder",
-          api_updates: "t.me/abirxdhackz",
-        },
-        500
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+            'Cache-Control': 'public, max-age=300', // Cache for 5 minutes
+          },
+        }
+      );
+    } catch (error) {
+      // Handle any unexpected errors
+      return new Response(
+        JSON.stringify({
+          error: `Server error: ${error.message}`,
+          api_owner: '@ISmartCoder',
+          api_updates: 't.me/abirxdhackz',
+        }),
+        {
+          status: 500,
+          headers: {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+          },
+        }
       );
     }
   },
 };
 
-// ---------------- helpers ----------------
-function json(obj, status = 200) {
-  return new Response(JSON.stringify(obj, null, 2), {
-    status,
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      "Access-Control-Allow-Origin": "*",
-    },
-  });
-}
+/**
+ * Extract video information from HTML
+ * @param {string} html - HTML response from fdown.net
+ * @returns {Object} - Video information object
+ */
+function extractVideoInfo(html) {
+  // Extract title
+  let title = 'Facebook Video';
+  const titleMatch = html.match(/<div class="lib-row lib-header">(.*?)<\/div>/i);
+  if (titleMatch && titleMatch[1]) {
+    const extractedTitle = titleMatch[1].trim();
+    if (extractedTitle && extractedTitle !== 'No video title') {
+      title = extractedTitle;
+    }
+  }
 
-function stripTags(s) {
-  return String(s || "").replace(/<[^>]*>/g, " ");
-}
+  // Extract thumbnail
+  let thumbnail = null;
+  const thumbMatch = html.match(/<img class="lib-img-show"[^>]*src="([^"]+)"/i);
+  if (thumbMatch && thumbMatch[1]) {
+    const thumbSrc = thumbMatch[1];
+    if (!thumbSrc.includes('no-thumbnail-fbdown.png')) {
+      thumbnail = thumbSrc;
+    }
+  }
 
-function decodeHtml(s) {
-  // Minimal decode for common entities
-  return String(s || "")
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .trim();
+  // Extract download links
+  const links = [];
+  const linkRegex = /<a[^>]*href="([^"]+)"[^>]*>(.*?)<\/a>/gi;
+  let linkMatch;
+
+  while ((linkMatch = linkRegex.exec(html)) !== null) {
+    const href = linkMatch[1];
+    const text = linkMatch[2].replace(/<[^>]*>/g, '').trim();
+
+    if (href && (href.toLowerCase().includes('download') || href.includes('fbcdn.net'))) {
+      let quality = 'Unknown';
+
+      if (text.toLowerCase().includes('hd') || text.toLowerCase().includes('high')) {
+        quality = 'HD';
+      } else if (
+        text.toLowerCase().includes('sd') ||
+        text.toLowerCase().includes('normal') ||
+        text.toLowerCase().includes('low')
+      ) {
+        quality = 'SD';
+      } else if (text) {
+        quality = text;
+      }
+
+      if (href.startsWith('http')) {
+        links.push({ quality, url: href });
+      }
+    }
+  }
+
+  // Remove duplicates
+  const seen = new Set();
+  const uniqueLinks = [];
+
+  for (const item of links) {
+    if (!seen.has(item.url)) {
+      seen.add(item.url);
+      uniqueLinks.push(item);
+    }
+  }
+
+  return {
+    title,
+    thumbnail,
+    links: uniqueLinks,
+  };
 }
