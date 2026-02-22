@@ -30,6 +30,7 @@ export default {
         return new Response(
           JSON.stringify({
             error: "Missing 'url' query parameter",
+            example: "use this parameters /?url=",
             api_owner: 'Haseeb Sahil',
             api_updates: 't.me/hsmodzofc2',
           }),
@@ -58,6 +59,7 @@ export default {
         return new Response(
           JSON.stringify({
             error: 'Only Facebook URLs are supported!',
+            example: "use this parameters /?url=",
             api_owner: 'Haseeb Sahil',
             api_updates: 't.me/hsmodzofc2',
           }),
@@ -98,6 +100,7 @@ export default {
         return new Response(
           JSON.stringify({
             error: 'Third-party service temporarily down',
+            example: "use this parameters /?url=",
             api_owner: 'Haseeb Sahil',
             api_updates: 't.me/hsmodzofc2',
           }),
@@ -118,6 +121,7 @@ export default {
         return new Response(
           JSON.stringify({
             error: 'No downloadable links found',
+            example: "use this parameters /?url=",
             api_owner: 'Haseeb Sahil',
             api_updates: 't.me/hsmodzofc2',
           }),
@@ -153,6 +157,7 @@ export default {
       return new Response(
         JSON.stringify({
           error: `Server error: ${error.message}`,
+          example: "use this parameters /?url=",
           api_owner: 'Haseeb Sahil',
           api_updates: 't.me/hsmodzofc2',
         }),
