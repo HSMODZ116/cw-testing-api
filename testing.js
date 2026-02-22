@@ -30,8 +30,8 @@ export default {
         return new Response(
           JSON.stringify({
             error: "Missing 'url' query parameter",
-            api_owner: '@ISmartCoder',
-            api_updates: 't.me/abirxdhackz',
+            api_owner: 'Haseeb Sahil',
+            api_updates: 't.me/hsmodzofc2',
           }),
           {
             status: 400,
@@ -58,8 +58,8 @@ export default {
         return new Response(
           JSON.stringify({
             error: 'Only Facebook URLs are supported!',
-            api_owner: '@ISmartCoder',
-            api_updates: 't.me/abirxdhackz',
+            api_owner: 'Haseeb Sahil',
+            api_updates: 't.me/hsmodzofc2',
           }),
           {
             status: 400,
@@ -98,8 +98,8 @@ export default {
         return new Response(
           JSON.stringify({
             error: 'Third-party service temporarily down',
-            api_owner: '@ISmartCoder',
-            api_updates: 't.me/abirxdhackz',
+            api_owner: 'Haseeb Sahil',
+            api_updates: 't.me/hsmodzofc2',
           }),
           {
             status: 502,
@@ -118,8 +118,8 @@ export default {
         return new Response(
           JSON.stringify({
             error: 'No downloadable links found',
-            api_owner: '@ISmartCoder',
-            api_updates: 't.me/abirxdhackz',
+            api_owner: 'Haseeb Sahil',
+            api_updates: 't.me/hsmodzofc2',
           }),
           {
             status: 404,
@@ -137,8 +137,8 @@ export default {
           thumbnail: videoInfo.thumbnail,
           links: videoInfo.links,
           total_links: videoInfo.links.length,
-          api_owner: '@ISmartCoder',
-          api_updates: 't.me/abirxdhackz',
+          api_owner: 'Haseeb Sahil',
+          api_updates: 't.me/hsmodzofc2',
         }, null, 2),
         {
           status: 200,
@@ -153,8 +153,8 @@ export default {
       return new Response(
         JSON.stringify({
           error: `Server error: ${error.message}`,
-          api_owner: '@ISmartCoder',
-          api_updates: 't.me/abirxdhackz',
+          api_owner: 'Haseeb Sahil',
+          api_updates: 't.me/hsmodzofc2',
         }),
         {
           status: 500,
