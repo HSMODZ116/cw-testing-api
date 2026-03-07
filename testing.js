@@ -2,12 +2,9 @@ export default {
   async fetch(request) {
     try {
       const url = new URL(request.url);
-      const { pathname } = url;
-
-      // =============================
-      // 🔹 Route 1: /fetch - Get video info
-      // =============================
-      if (pathname === "/fetch") {
+      
+      // Route: /info - Get video info
+      if (url.pathname === "/info") {
         const { searchParams } = url;
         const targetUrl = searchParams.get("url");
 
@@ -65,53 +62,43 @@ export default {
           streaming_url: streamingUrl,
         });
       }
-
+      
       // =============================
-      // 🔹 Route 2: /download - Stream video
+      // 🔹 Route: /download - Stream video
       // =============================
-      if (pathname === "/download") {
+      if (url.pathname === "/download") {
         const target = url.searchParams.get("url");
         const fileName = url.searchParams.get("file_name") || "video.mp4";
+        const range = request.headers.get("Range");
 
         if (!target) {
           return new Response("❌ Missing 'url' parameter", { status: 400 });
         }
 
-        // Fetch the video with proper headers
-        const response = await fetch(target, {
+        // Fetch the video with range support for streaming
+        const videoResponse = await fetch(target, {
           headers: {
             "User-Agent":
               "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-            "Referer": "https://latinporn.vip/",
-            "Accept": "video/mp4,video/*;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
+            "Range": range || "", // Pass through range header for seeking
           },
-          redirect: "follow",
         });
 
-        // Create a new response with the video stream
-        const headers = new Headers(response.headers);
-        
-        // Set content-disposition to force download with custom filename
-        headers.set("Content-Disposition", `attachment; filename="${fileName}.mp4"`);
-        
-        // Ensure CORS headers for cross-origin access
-        headers.set("Access-Control-Allow-Origin", "*");
-        
-        // Set cache control for better performance
-        headers.set("Cache-Control", "public, max-age=3600");
+        // Create response with proper headers for streaming
+        const responseHeaders = new Headers(videoResponse.headers);
+        responseHeaders.set("Access-Control-Allow-Origin", "*");
+        responseHeaders.set("Content-Disposition", `attachment; filename="${fileName}"`);
+        responseHeaders.set("Cache-Control", "public, max-age=86400");
 
-        return new Response(response.body, {
-          status: response.status,
-          statusText: response.statusText,
-          headers: headers,
+        return new Response(videoResponse.body, {
+          status: videoResponse.status,
+          statusText: videoResponse.statusText,
+          headers: responseHeaders,
         });
       }
 
-      // =============================
-      // 🔹 Default route - 404
-      // =============================
-      return json({ success: false, error: "Not found" }, 404);
+      // 404 for other routes
+      return new Response("Not found", { status: 404 });
 
     } catch (err) {
       return json({ success: false, error: err.message }, 500);
