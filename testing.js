@@ -1,4 +1,5 @@
-// Cloudflare Worker for Flux AI Image Generation Only
+// Cloudflare Worker for Flux AI Image Generation
+// Model: fal-ai/flux-pro (Fixed)
 
 export default {
   async fetch(request, env, ctx) {
@@ -17,24 +18,23 @@ export default {
     if (request.method !== 'GET') {
       return jsonResponse({
         status: false,
-        error: 'Method not allowed. Use GET'
+        error: 'Sirf GET method allow hai'
       }, 405);
     }
 
     const url = new URL(request.url);
     const prompt = url.searchParams.get('prompt');
-    const model = url.searchParams.get('model') || 'fal-ai/flux-2';
 
     // Validation
     if (!prompt) {
       return jsonResponse({
         status: false,
-        error: 'Parameter "prompt" diperlukan'
+        error: 'Meharbani karke "prompt" parameter do'
       }, 400);
     }
 
     try {
-      const result = await generateImage(prompt, model, env);
+      const result = await generateImage(prompt, env);
 
       if (!result.success) {
         return jsonResponse({
@@ -45,6 +45,7 @@ export default {
 
       return jsonResponse({
         status: true,
+        message: "Tasveer kamyabi se bana li gayi!",
         data: result
       });
 
@@ -74,6 +75,9 @@ const CONFIG = {
     'x-supabase-api-version': '2024-01-01'
   }
 };
+
+// Fixed model - permanent
+const FIXED_MODEL = 'fal-ai/flux-pro';
 
 // Simple in-memory session storage
 let SESSION = {
@@ -158,16 +162,20 @@ async function uploadToCloud(buffer) {
   }
 }
 
-async function generateImage(prompt, model, env) {
+async function generateImage(prompt, env) {
   try {
     const token = await getAuthToken(env);
     if (!token) {
-      return { success: false, msg: 'Authentication failed' };
+      return { 
+        success: false, 
+        msg: 'Auth mein masla hogaya' 
+      };
     }
 
+    // Using fixed model
     const payload = { 
       prompt: prompt, 
-      model: model 
+      model: FIXED_MODEL 
     };
     
     const headers = { 
@@ -195,23 +203,31 @@ async function generateImage(prompt, model, env) {
       const cloudUrl = await uploadToCloud(bytes);
 
       if (!cloudUrl) {
-        return { success: false, msg: 'Failed to upload image to cloud' };
+        return { 
+          success: false, 
+          msg: 'Tasveer upload nahi hui' 
+        };
       }
 
       return {
         success: true,
-        prompt: data.prompt || prompt,
-        model: data.model || model,
-        url: cloudUrl,
-        type: 'generate'
+        prompt: prompt,
+        model: FIXED_MODEL,
+        url: cloudUrl
       };
     }
     
-    return { success: false, msg: 'No image data returned from API' };
+    return { 
+      success: false, 
+      msg: 'Tasveer ka data nahi mila' 
+    };
 
   } catch (error) {
     console.error(`Generate Error: ${error.message}`);
-    return { success: false, msg: error.message };
+    return { 
+      success: false, 
+      msg: `Kuch masla hogaya: ${error.message}` 
+    };
   }
 }
 
