@@ -80,7 +80,7 @@ export default {
         return jsonResponse({
           success: false,
           error: result.msg,
-          details: result.errorData,
+          details: result.details,
           developer: 'Haseeb Sahil',
           channel: '@hsmodzofc2'
         }, 500);
@@ -126,26 +126,23 @@ const CONFIG = {
   SECRETS: {
     FP: '78dc286eaeb7fb88586e07f0d18bf61b',
     APP_ID: 'aifaceswap',
-    PUBLIC_KEY: `-----BEGIN PUBLIC KEY-----
-MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCwlO+boC6cwRo3UfXVBadaYwcX
-0zKS2fuVNY2qZ0dgwb1NJ+/Q9FeAosL4ONiosD71on3PVYqRUlL5045mvH2K9i8b
-AFVMEip7E6RMK6tKAAif7xzZrXnP1GZ5Rijtqdgwh+YmzTo39cuBCsZqK9oEoeQ3
-r/myG9S+9cR5huTuFQIDAQAB
------END PUBLIC KEY-----`
+    THEME_VERSION: '83EmcUoQTUv50LhNx0VrdcK8rcGexcP35FcZDcpgWsAXEyO4xqL5shCY6sFIWB2Q'
   },
   HEADERS: {
     'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Mobile Safari/537.36',
     'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'sec-ch-ua': '"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
+    'sec-ch-ua-mobile': '?1',
     'sec-ch-ua-platform': '"Android"',
+    'sec-fetch-dest': 'empty',
+    'sec-fetch-mode': 'cors',
+    'sec-fetch-site': 'same-site',
     'origin': 'https://live3d.io',
     'referer': 'https://live3d.io/',
     'priority': 'u=1, i'
   }
 };
-
-// Simple in-memory cache for headers
-let cachedHeaders = null;
-let headerExpiry = 0;
 
 const utils = {
   genHex: (bytes) => {
@@ -163,108 +160,18 @@ const utils = {
     return result;
   },
 
-  // Simple XOR encryption (fallback if RSA fails)
-  simpleEncrypt: (data, key) => {
-    let result = '';
-    for (let i = 0; i < data.length; i++) {
-      result += String.fromCharCode(data.charCodeAt(i) ^ key.charCodeAt(i % key.length));
-    }
-    return btoa(result);
-  },
-
-  async generateHeaders() {
-    // Return cached headers if still valid (5 minutes)
-    if (cachedHeaders && Date.now() < headerExpiry) {
-      return cachedHeaders;
-    }
-
-    try {
-      const aesKey = utils.genRandomString(16);
-      const xCode = Date.now().toString();
-      
-      // Try RSA encryption, fallback to simple encryption if fails
-      let xGuide;
-      try {
-        xGuide = await utils.rsaEncrypt(aesKey);
-      } catch (rsaError) {
-        console.log('RSA failed, using fallback encryption');
-        xGuide = utils.simpleEncrypt(aesKey, CONFIG.SECRETS.FP);
-      }
-      
-      const plaintextFp = `${CONFIG.SECRETS.APP_ID}:${CONFIG.SECRETS.FP}`;
-      let fp1;
-      try {
-        fp1 = await utils.aesEncrypt(plaintextFp, aesKey, aesKey);
-      } catch (aesError) {
-        console.log('AES failed, using fallback');
-        fp1 = utils.simpleEncrypt(plaintextFp, aesKey);
-      }
-
-      cachedHeaders = {
-        ...CONFIG.HEADERS,
-        'x-code': xCode,
-        'x-guide': xGuide,
-        'fp': CONFIG.SECRETS.FP,
-        'fp1': fp1
-      };
-      
-      headerExpiry = Date.now() + 5 * 60 * 1000; // 5 minutes cache
-      return cachedHeaders;
-    } catch (error) {
-      console.error('Header generation error:', error);
-      // Return basic headers if encryption fails
-      return {
-        ...CONFIG.HEADERS,
-        'fp': CONFIG.SECRETS.FP,
-      };
-    }
-  },
-
-  // Simplified AES encryption using Web Crypto API
-  async aesEncrypt(plaintext, keyStr, ivStr) {
-    try {
-      const key = await crypto.subtle.importKey(
-        'raw',
-        new TextEncoder().encode(keyStr.slice(0, 16)),
-        { name: 'AES-CBC' },
-        false,
-        ['encrypt']
-      );
-      
-      const iv = new TextEncoder().encode(ivStr.slice(0, 16));
-      const encoded = new TextEncoder().encode(plaintext);
-      
-      const encrypted = await crypto.subtle.encrypt(
-        { name: 'AES-CBC', iv: iv },
-        key,
-        encoded
-      );
-      
-      return btoa(String.fromCharCode(...new Uint8Array(encrypted)));
-    } catch (error) {
-      console.error('AES Error:', error);
-      throw error;
-    }
-  },
-
-  // RSA encryption
-  async rsaEncrypt(data) {
-    try {
-      const publicKeyPem = CONFIG.SECRETS.PUBLIC_KEY;
-      const publicKey = await importPublicKey(publicKeyPem);
-      
-      const encoded = new TextEncoder().encode(data);
-      const encrypted = await crypto.subtle.encrypt(
-        { name: 'RSA-OAEP', hash: 'SHA-1' },
-        publicKey,
-        encoded
-      );
-      
-      return btoa(String.fromCharCode(...new Uint8Array(encrypted)));
-    } catch (error) {
-      console.error('RSA Error:', error);
-      throw error;
-    }
+  generateHeaders: () => {
+    const randomString = utils.genRandomString(16);
+    const timestamp = Date.now();
+    
+    return {
+      ...CONFIG.HEADERS,
+      'fp': CONFIG.SECRETS.FP,
+      'x-code': timestamp.toString(),
+      'x-guide': randomString,
+      'fp1': btoa(`${CONFIG.SECRETS.APP_ID}:${CONFIG.SECRETS.FP}`),
+      'theme-version': CONFIG.SECRETS.THEME_VERSION
+    };
   },
 
   async downloadImage(url) {
@@ -319,40 +226,6 @@ const utils = {
   }
 };
 
-// Helper function to import RSA public key
-async function importPublicKey(pem) {
-  const pemContents = pem
-    .replace('-----BEGIN PUBLIC KEY-----', '')
-    .replace('-----END PUBLIC KEY-----', '')
-    .replace(/\s/g, '');
-  
-  const binaryKey = Uint8Array.from(atob(pemContents), c => c.charCodeAt(0));
-  
-  return await crypto.subtle.importKey(
-    'spki',
-    binaryKey,
-    { name: 'RSA-OAEP', hash: 'SHA-1' },
-    false,
-    ['encrypt']
-  );
-}
-
-async function makeRequest(url, options, isJson = true) {
-  try {
-    const response = await fetch(url, options);
-    const text = await response.text();
-    
-    // Try to parse as JSON, return raw if fails
-    try {
-      return { success: true, data: JSON.parse(text), raw: text };
-    } catch (e) {
-      return { success: false, data: null, raw: text, error: e.message };
-    }
-  } catch (error) {
-    return { success: false, data: null, error: error.message };
-  }
-}
-
 async function handleLive3DGenerate(imageInput, options = {}) {
   const {
     prompt = "best quality, naked, nude",
@@ -384,8 +257,9 @@ async function handleLive3DGenerate(imageInput, options = {}) {
     }
 
     // Step 1: Upload image
-    const headers = await utils.generateHeaders();
+    const headers = utils.generateHeaders();
     
+    // Create form data
     const formData = new FormData();
     const blob = new Blob([imageBuffer], { type: 'image/jpeg' });
     formData.append('file', blob, `upload_${Date.now()}.jpg`);
@@ -393,29 +267,51 @@ async function handleLive3DGenerate(imageInput, options = {}) {
     formData.append('request_from', request_from.toString());
     formData.append('origin_from', originFrom);
 
-    const uploadResult = await makeRequest(CONFIG.BASE_URL + CONFIG.ENDPOINTS.UPLOAD, {
+    console.log('Uploading image...');
+    
+    const uploadResponse = await fetch(CONFIG.BASE_URL + CONFIG.ENDPOINTS.UPLOAD, {
       method: 'POST',
       headers: headers,
       body: formData
     });
     
-    if (!uploadResult.success || !uploadResult.data) {
-      console.log('Upload failed:', uploadResult.raw);
+    const uploadText = await uploadResponse.text();
+    console.log('Upload response:', uploadText);
+    
+    let uploadData;
+    try {
+      uploadData = JSON.parse(uploadText);
+    } catch (e) {
+      console.log('Failed to parse upload response as JSON');
       return { 
         success: false, 
-        msg: 'Upload failed: Invalid response from server',
-        errorData: uploadResult.raw?.substring(0, 200)
+        msg: 'Upload failed: Server returned invalid response',
+        details: uploadText.substring(0, 200)
       };
     }
 
-    let serverPath = uploadResult.data.data;
-    if (typeof serverPath === 'object' && serverPath.path) {
-      serverPath = serverPath.path;
+    if (!uploadData || !uploadData.data) {
+      return { 
+        success: false, 
+        msg: 'Upload failed: No data in response',
+        details: uploadData
+      };
+    }
+
+    let serverPath = uploadData.data;
+    if (typeof serverPath === 'object') {
+      serverPath = serverPath.path || serverData.url || serverData.file_path;
     }
 
     if (!serverPath) {
-      return { success: false, msg: 'Failed to get server path after upload' };
+      return { 
+        success: false, 
+        msg: 'Failed to get server path after upload',
+        details: uploadData
+      };
     }
+
+    console.log('Upload successful, path:', serverPath);
 
     // Step 2: Submit generation task
     const submitPayload = {
@@ -432,24 +328,38 @@ async function handleLive3DGenerate(imageInput, options = {}) {
       "origin_from": originFrom
     };
 
-    const submitResult = await makeRequest(CONFIG.BASE_URL + CONFIG.ENDPOINTS.CREATE, {
+    console.log('Submitting task...');
+    
+    const submitResponse = await fetch(CONFIG.BASE_URL + CONFIG.ENDPOINTS.CREATE, {
       method: 'POST',
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify(submitPayload)
     });
 
-    if (!submitResult.success || !submitResult.data) {
+    const submitText = await submitResponse.text();
+    console.log('Submit response:', submitText);
+    
+    let submitData;
+    try {
+      submitData = JSON.parse(submitText);
+    } catch (e) {
       return { 
         success: false, 
-        msg: 'Failed to create task',
-        errorData: submitResult.raw?.substring(0, 200)
+        msg: 'Submit failed: Invalid response',
+        details: submitText.substring(0, 200)
       };
     }
 
-    const taskId = submitResult.data.data?.task_id;
+    const taskId = submitData.data?.task_id;
     if (!taskId) {
-      return { success: false, msg: 'Failed to get Task ID' };
+      return { 
+        success: false, 
+        msg: 'Failed to get Task ID',
+        details: submitData
+      };
     }
+
+    console.log('Task ID:', taskId);
 
     // Step 3: Check status
     let isCompleted = false;
@@ -470,16 +380,21 @@ async function handleLive3DGenerate(imageInput, options = {}) {
         "origin_from": originFrom
       };
 
-      const statusResult = await makeRequest(CONFIG.BASE_URL + CONFIG.ENDPOINTS.STATUS, {
+      const statusResponse = await fetch(CONFIG.BASE_URL + CONFIG.ENDPOINTS.STATUS, {
         method: 'POST',
         headers: { ...headers, 'Content-Type': 'application/json' },
         body: JSON.stringify(statusPayload)
       });
 
-      if (statusResult.success && statusResult.data) {
-        const data = statusResult.data.data;
+      const statusText = await statusResponse.text();
+      
+      try {
+        const statusData = JSON.parse(statusText);
+        const data = statusData.data;
+        
         if (data) {
           const status = data.status;
+          console.log(`Attempt ${attempts}: Status = ${status}`);
           
           if (status === 2) {
             resultUrl = data.result_image;
@@ -487,8 +402,17 @@ async function handleLive3DGenerate(imageInput, options = {}) {
               resultUrl = CONFIG.CDN_URL + resultUrl;
             }
             isCompleted = true;
+            console.log('Generation completed!');
+          } else if (status === 3) {
+            return { 
+              success: false, 
+              msg: 'Generation failed',
+              details: data
+            };
           }
         }
+      } catch (e) {
+        console.log(`Status check ${attempts} failed to parse`);
       }
     }
 
@@ -500,6 +424,7 @@ async function handleLive3DGenerate(imageInput, options = {}) {
     }
 
     // Step 4: Download and upload to cloud
+    console.log('Downloading result...');
     const resultBuffer = await utils.downloadImage(resultUrl);
     if (!resultBuffer) {
       return { 
@@ -508,6 +433,7 @@ async function handleLive3DGenerate(imageInput, options = {}) {
       };
     }
 
+    console.log('Uploading to cloud...');
     const cloudUrl = await utils.uploadToCloud(resultBuffer);
     if (!cloudUrl) {
       return { 
@@ -531,7 +457,8 @@ async function handleLive3DGenerate(imageInput, options = {}) {
     console.error(`Live3D Error: ${error.message}`);
     return { 
       success: false, 
-      msg: error.message
+      msg: error.message,
+      details: error.stack
     };
   }
 }
