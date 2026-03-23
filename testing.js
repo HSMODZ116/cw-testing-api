@@ -1,4 +1,4 @@
-// Cloudflare Worker for Flux AI Image Generation & Editing
+// Cloudflare Worker for Flux AI Image Generation Only
 
 export default {
   async fetch(request, env, ctx) {
@@ -13,20 +13,19 @@ export default {
       });
     }
 
+    // Only allow GET requests
+    if (request.method !== 'GET') {
+      return jsonResponse({
+        status: false,
+        error: 'Method not allowed. Use GET'
+      }, 405);
+    }
+
     const url = new URL(request.url);
-    const action = url.searchParams.get('action');
     const prompt = url.searchParams.get('prompt');
-    const image = url.searchParams.get('image');
     const model = url.searchParams.get('model') || 'fal-ai/flux-2';
 
     // Validation
-    if (!action) {
-      return jsonResponse({
-        status: false,
-        error: 'Parameter "action" diperlukan. Pilih: "edit" atau "generate"'
-      }, 400);
-    }
-
     if (!prompt) {
       return jsonResponse({
         status: false,
@@ -34,27 +33,8 @@ export default {
       }, 400);
     }
 
-    if (!['edit', 'generate'].includes(action)) {
-      return jsonResponse({
-        status: false,
-        error: 'Action tidak valid. Pilih: "edit" atau "generate"'
-      }, 400);
-    }
-
-    if (action === 'edit' && !image) {
-      return jsonResponse({
-        status: false,
-        error: 'Untuk action "edit", parameter "image" diperlukan (URL)'
-      }, 400);
-    }
-
     try {
-      let result;
-      if (action === 'edit') {
-        result = await handleImageEdit(image, prompt, env);
-      } else {
-        result = await handleImageGenerate(prompt, model, env);
-      }
+      const result = await generateImage(prompt, model, env);
 
       if (!result.success) {
         return jsonResponse({
@@ -71,8 +51,6 @@ export default {
     } catch (error) {
       return jsonResponse({
         status: false,
-        statusCode: 500,
-        creator: 'shannz',
         error: error.message
       }, 500);
     }
@@ -84,8 +62,6 @@ const CONFIG = {
   SECRET_KEY: 'sb_publishable_W_1Ofv9769iYEEn9dfyAHQ_OhuCER6g',
   PATHS: {
     SIGNUP: '/auth/v1/signup',
-    REFRESH: '/auth/v1/token',
-    EDIT: '/functions/v1/edit-image',
     GENERATE: '/functions/v1/generate-image'
   },
   HEADERS: {
@@ -99,49 +75,19 @@ const CONFIG = {
   }
 };
 
-// Session storage using Cloudflare KV (you need to bind a KV namespace named 'SESSION')
-// If you don't want to use KV, you can use a simple in-memory store (but it won't persist across requests)
-let SESSION_CACHE = {
+// Simple in-memory session storage
+let SESSION = {
   access_token: null,
-  refresh_token: null,
   expires_at: 0
 };
 
-async function getSession(env) {
-  // Try to get from KV if available
-  if (env && env.SESSION) {
-    const stored = await env.SESSION.get('flux_session', 'json');
-    if (stored && stored.access_token && stored.expires_at > Date.now()) {
-      return stored;
-    }
+async function getAuthToken(env) {
+  // Check if existing token is still valid (not expired)
+  if (SESSION.access_token && SESSION.expires_at > Date.now()) {
+    return SESSION.access_token;
   }
-  
-  // Fallback to in-memory cache
-  if (SESSION_CACHE.access_token && SESSION_CACHE.expires_at > Date.now()) {
-    return SESSION_CACHE;
-  }
-  
-  return null;
-}
 
-async function setSession(session, env) {
-  if (env && env.SESSION) {
-    await env.SESSION.put('flux_session', JSON.stringify(session));
-  }
-  SESSION_CACHE = session;
-}
-
-async function handleAuth(env) {
   try {
-    // Check existing session
-    const existingSession = await getSession(env);
-    if (existingSession && existingSession.access_token) {
-      const isExpired = Date.now() >= existingSession.expires_at;
-      if (!isExpired) {
-        return existingSession.access_token;
-      }
-    }
-
     const payload = { 
       data: {}, 
       gotrue_meta_security: { captcha_token: null } 
@@ -162,13 +108,11 @@ async function handleAuth(env) {
     const data = await response.json();
 
     if (data.access_token) {
-      const session = {
+      SESSION = {
         access_token: data.access_token,
-        refresh_token: data.refresh_token,
         expires_at: Date.now() + (60 * 60 * 1000) // 1 hour
       };
-      await setSession(session, env);
-      return session.access_token;
+      return SESSION.access_token;
     }
     return null;
   } catch (error) {
@@ -177,18 +121,7 @@ async function handleAuth(env) {
   }
 }
 
-async function toBase64FromUrl(imageUrl) {
-  try {
-    const response = await fetch(imageUrl);
-    const buffer = await response.arrayBuffer();
-    return btoa(String.fromCharCode(...new Uint8Array(buffer)));
-  } catch (e) {
-    console.error('toBase64 Error:', e);
-    return null;
-  }
-}
-
-async function uploadToCloud(buffer, env) {
+async function uploadToCloud(buffer) {
   try {
     const filename = `flux-${crypto.randomUUID()}.png`;
     const contentType = 'image/png';
@@ -220,67 +153,17 @@ async function uploadToCloud(buffer, env) {
 
     return `https://api.cloudsky.biz.id/file?key=${encodeURIComponent(filename)}`;
   } catch (error) {
-    console.error(`[Upload Cloud Error]: ${error.message}`);
+    console.error(`Upload Error: ${error.message}`);
     return null;
   }
 }
 
-async function handleImageEdit(imageInput, prompt, env) {
+async function generateImage(prompt, model, env) {
   try {
-    const token = await handleAuth(env);
-    if (!token) return { success: false, msg: 'Authentication failed' };
-
-    const base64Image = await toBase64FromUrl(imageInput);
-    if (!base64Image) return { success: false, msg: 'Invalid input image' };
-
-    const payload = {
-      image: base64Image,
-      mimeType: 'image/png',
-      prompt: prompt,
-      model: 'auto',
-      isFirstAttempt: true
-    };
-
-    const headers = { 
-      ...CONFIG.HEADERS, 
-      'apikey': CONFIG.SECRET_KEY, 
-      'Authorization': `Bearer ${token}` 
-    };
-
-    const response = await fetch(CONFIG.BASE_ENDPOINT + CONFIG.PATHS.EDIT, {
-      method: 'POST',
-      headers: headers,
-      body: JSON.stringify(payload)
-    });
-
-    const data = await response.json();
-    
-    if (data && data.image) {
-      const resultBuffer = Uint8Array.from(atob(data.image), c => c.charCodeAt(0));
-      const cloudUrl = await uploadToCloud(resultBuffer, env);
-      
-      if (!cloudUrl) return { success: false, msg: 'Failed to upload image to cloud' };
-
-      return {
-        success: true,
-        prompt: data.prompt || prompt,
-        model: data.model || 'auto',
-        url: cloudUrl,
-        type: 'edit'
-      };
+    const token = await getAuthToken(env);
+    if (!token) {
+      return { success: false, msg: 'Authentication failed' };
     }
-    return { success: false, msg: 'No image data returned from API' };
-
-  } catch (error) {
-    console.error(`[Edit Image Error]: ${error.message}`);
-    return { success: false, msg: error.message };
-  }
-}
-
-async function handleImageGenerate(prompt, model, env) {
-  try {
-    const token = await handleAuth(env);
-    if (!token) return { success: false, msg: 'Authentication failed' };
 
     const payload = { 
       prompt: prompt, 
@@ -302,10 +185,18 @@ async function handleImageGenerate(prompt, model, env) {
     const data = await response.json();
 
     if (data && data.image) {
-      const resultBuffer = Uint8Array.from(atob(data.image), c => c.charCodeAt(0));
-      const cloudUrl = await uploadToCloud(resultBuffer, env);
+      // Convert base64 to buffer
+      const binaryString = atob(data.image);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      
+      const cloudUrl = await uploadToCloud(bytes);
 
-      if (!cloudUrl) return { success: false, msg: 'Failed to upload image to cloud' };
+      if (!cloudUrl) {
+        return { success: false, msg: 'Failed to upload image to cloud' };
+      }
 
       return {
         success: true,
@@ -315,10 +206,11 @@ async function handleImageGenerate(prompt, model, env) {
         type: 'generate'
       };
     }
+    
     return { success: false, msg: 'No image data returned from API' };
 
   } catch (error) {
-    console.error(`[Generate Image Error]: ${error.message}`);
+    console.error(`Generate Error: ${error.message}`);
     return { success: false, msg: error.message };
   }
 }
