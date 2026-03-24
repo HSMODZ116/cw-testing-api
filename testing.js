@@ -1,4 +1,4 @@
-// Cloudflare Worker for NananaV2 AI - Image to Image Transformation
+// Cloudflare Worker for Qwen AI - Image to Image Editor
 // Developer: Haseeb Sahil
 // Channel: @hsmodzofc2
 
@@ -27,14 +27,14 @@ export default {
 
     const url = new URL(request.url);
     const imageUrl = url.searchParams.get('url');
-    const prompt = url.searchParams.get('q');
+    const prompt = url.searchParams.get('prompt');
 
     // Validation
     if (!imageUrl) {
       return jsonResponse({
         success: false,
         error: 'Image URL parameter "url" is required.',
-        example: 'https://your-worker.workers.dev/?url=https://example.com/image.jpg&q=make it anime style',
+        example: 'https://your-worker.workers.dev/?url=https://example.com/image.jpg&prompt=change background to beach',
         developer: 'Haseeb Sahil',
         channel: '@hsmodzofc2'
       }, 400);
@@ -43,8 +43,8 @@ export default {
     if (!prompt) {
       return jsonResponse({
         success: false,
-        error: 'Prompt parameter "q" is required.',
-        example: 'anime style, cartoon, realistic, etc.',
+        error: 'Prompt parameter is required.',
+        example: 'change background, add sunglasses, make it sunset',
         developer: 'Haseeb Sahil',
         channel: '@hsmodzofc2'
       }, 400);
@@ -80,7 +80,7 @@ export default {
     }
 
     try {
-      const result = await nananaTransform(imageUrl, prompt);
+      const result = await qwenEdit(imageUrl, prompt);
 
       if (!result.success) {
         return jsonResponse({
@@ -94,11 +94,10 @@ export default {
 
       return jsonResponse({
         success: true,
-        message: "Image transformed successfully!",
+        message: "Image edited successfully!",
         data: {
-          prompt: result.prompt,
-          original: result.original,
-          output: result.output,
+          prompt_used: result.prompt_used,
+          result: result.result_url,
           timestamp: new Date().toISOString()
         },
         developer: 'Haseeb Sahil',
@@ -119,18 +118,16 @@ export default {
 };
 
 const CONFIG = {
-  BASE_URL: 'https://nanana.app',
-  USER_AGENT: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+  API_URL: 'https://api.dyysilence.biz.id/api/ai-image/qwen',
+  API_KEY: 'dyy'
 };
 
 const utils = {
-  delay: (ms) => new Promise(resolve => setTimeout(resolve, ms)),
-
   async downloadImage(url) {
     try {
       const response = await fetch(url, {
         headers: {
-          'User-Agent': CONFIG.USER_AGENT
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -150,7 +147,7 @@ const utils = {
 
   async uploadToCloud(buffer) {
     try {
-      const filename = `nanana-${crypto.randomUUID()}.png`;
+      const filename = `qwen-${crypto.randomUUID()}.png`;
       const contentType = 'image/png';
       const fileSize = buffer.byteLength;
 
@@ -205,132 +202,79 @@ const utils = {
   }
 };
 
-async function nananaTransform(imageUrl, prompt) {
+async function qwenEdit(imageUrl, prompt) {
   try {
-    const headers = {
-      'User-Agent': CONFIG.USER_AGENT,
-      'Content-Type': 'application/json',
-      'Origin': 'https://nanana.app',
-      'Referer': 'https://nanana.app/',
-      'Accept': 'application/json, text/plain, */*'
-    };
-
-    // Step 1: Create transformation job
-    console.log('Step 1: Creating transformation job...');
-    console.log(`Prompt: ${prompt}`);
+    console.log('Qwen AI Edit Started');
     console.log(`Image URL: ${imageUrl}`);
-    
-    const createPayload = {
-      prompt: prompt,
-      image_urls: [imageUrl]
-    };
+    console.log(`Prompt: ${prompt}`);
 
-    const createResult = await utils.makeRequest(`${CONFIG.BASE_URL}/api/image-to-image`, {
-      method: 'POST',
-      headers: headers,
-      body: JSON.stringify(createPayload)
+    // Call Qwen API
+    const apiUrl = `${CONFIG.API_URL}?url=${encodeURIComponent(imageUrl)}&prompt=${encodeURIComponent(prompt)}&apikey=${CONFIG.API_KEY}`;
+    
+    const result = await utils.makeRequest(apiUrl, {
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json'
+      }
     });
 
-    if (!createResult.success) {
-      console.log('Create job failed:', createResult);
+    if (!result.success) {
+      console.log('API request failed:', result);
       return { 
         success: false, 
-        error: 'Failed to create transformation job',
-        details: createResult.raw || createResult.error
+        error: 'Qwen AI service unavailable',
+        details: result.raw || result.error
       };
     }
 
-    const requestId = createResult.data?.request_id;
-    if (!requestId) {
-      return { 
-        success: false, 
-        error: 'No request ID received',
-        details: createResult.data
-      };
-    }
-
-    console.log('Job created, Request ID:', requestId);
-
-    // Step 2: Poll for result
-    console.log('Step 2: Waiting for result...');
-    let result = null;
-    const maxAttempts = 25;
+    const data = result.data;
     
-    for (let i = 0; i < maxAttempts; i++) {
-      await utils.delay(4000);
-      
-      const checkPayload = {
-        requestId: requestId,
-        type: 'image-to-image'
+    // Check if response has error
+    if (data.error || data.status === false) {
+      return { 
+        success: false, 
+        error: data.message || data.error || 'Qwen AI processing failed',
+        details: data
       };
+    }
 
-      const checkResult = await utils.makeRequest(`${CONFIG.BASE_URL}/api/get-result`, {
-        method: 'POST',
-        headers: headers,
-        body: JSON.stringify(checkPayload)
-      });
+    // Get result URL
+    let resultUrl = data.result_url || data.result || data.data?.result_url;
+    
+    if (!resultUrl) {
+      return { 
+        success: false, 
+        error: 'No result URL received',
+        details: data
+      };
+    }
 
-      console.log(`Attempt ${i + 1}/${maxAttempts}:`, checkResult.data?.completed ? 'Completed' : 'Processing');
-      
-      if (checkResult.success && checkResult.data?.completed) {
-        result = checkResult.data;
-        console.log('Transformation completed!');
-        break;
+    console.log('Result URL:', resultUrl);
+
+    // Optional: Download and upload to cloud for permanent storage
+    // This step is optional since the API might return a direct URL
+    try {
+      const resultBuffer = await utils.downloadImage(resultUrl);
+      if (resultBuffer) {
+        const cloudUrl = await utils.uploadToCloud(resultBuffer);
+        if (cloudUrl) {
+          resultUrl = cloudUrl;
+          console.log('Uploaded to cloud storage');
+        }
       }
-    }
-
-    if (!result) {
-      return { 
-        success: false, 
-        error: `Processing timeout after ${maxAttempts * 4} seconds` 
-      };
-    }
-
-    // Get output URL
-    const outputUrl = result.image_url || result.url || result.data?.images?.[0]?.url;
-    if (!outputUrl) {
-      return { 
-        success: false, 
-        error: 'No output image URL received',
-        details: result
-      };
-    }
-
-    console.log('Output URL:', outputUrl);
-
-    // Step 3: Download result and upload to cloud
-    console.log('Step 3: Processing final image...');
-    const resultBuffer = await utils.downloadImage(outputUrl);
-    if (!resultBuffer) {
-      // If can't download, return the original URL
-      return {
-        success: true,
-        prompt: prompt,
-        original: imageUrl,
-        output: outputUrl
-      };
-    }
-
-    const cloudUrl = await utils.uploadToCloud(resultBuffer);
-    if (!cloudUrl) {
-      // If upload fails, return original URL
-      return {
-        success: true,
-        prompt: prompt,
-        original: imageUrl,
-        output: outputUrl
-      };
+    } catch (uploadError) {
+      console.log('Cloud upload skipped, using original URL');
     }
 
     return {
       success: true,
-      prompt: prompt,
-      original: imageUrl,
-      output: cloudUrl
+      prompt_used: data.prompt || prompt,
+      result_url: resultUrl
     };
 
   } catch (error) {
-    console.error(`Nanana Error: ${error.message}`);
+    console.error(`Qwen Error: ${error.message}`);
     return { success: false, error: error.message };
   }
 }
