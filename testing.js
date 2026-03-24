@@ -1,4 +1,4 @@
-// Cloudflare Worker for PixWithAI - Free Flux Dev Image Generator
+// Cloudflare Worker for Live3D AI - Image Editor
 // Developer: Haseeb Sahil
 // Channel: @hsmodzofc2
 
@@ -26,15 +26,25 @@ export default {
     }
 
     const url = new URL(request.url);
+    const image = url.searchParams.get('image');
     const prompt = url.searchParams.get('prompt');
-    const ratio = url.searchParams.get('ratio') || '1:1';
 
     // Validation
+    if (!image) {
+      return jsonResponse({
+        success: false,
+        error: 'Image parameter is required. Please provide an image URL.',
+        example: 'https://your-worker.workers.dev/?image=https://example.com/image.jpg&prompt=make him smile',
+        developer: 'Haseeb Sahil',
+        channel: '@hsmodzofc2'
+      }, 400);
+    }
+
     if (!prompt) {
       return jsonResponse({
         success: false,
-        error: 'Prompt parameter is required. Please provide a prompt.',
-        example: 'https://your-worker.workers.dev/?prompt=a beautiful sunset',
+        error: 'Prompt parameter is required. Describe what you want to change.',
+        example: 'make him smile, add sunglasses, change background',
         developer: 'Haseeb Sahil',
         channel: '@hsmodzofc2'
       }, 400);
@@ -50,28 +60,27 @@ export default {
       }, 400);
     }
 
-    if (prompt.length > 1000) {
+    if (prompt.length > 500) {
       return jsonResponse({
         success: false,
-        error: 'Prompt is too long. Maximum 1000 characters allowed.',
+        error: 'Prompt is too long. Maximum 500 characters allowed.',
         developer: 'Haseeb Sahil',
         channel: '@hsmodzofc2'
       }, 400);
     }
 
-    // Validate ratio
-    const validRatios = ['1:1', '16:9', '9:16', '4:3', '3:4', '2:3', '3:2'];
-    if (!validRatios.includes(ratio)) {
+    // Validate image URL
+    if (!image.startsWith('http')) {
       return jsonResponse({
         success: false,
-        error: `Invalid ratio. Choose from: ${validRatios.join(', ')}`,
+        error: 'Only HTTP/HTTPS image URLs are supported.',
         developer: 'Haseeb Sahil',
         channel: '@hsmodzofc2'
       }, 400);
     }
 
     try {
-      const result = await generateImage(prompt, ratio);
+      const result = await live3dEdit(image, prompt);
 
       if (!result.success) {
         return jsonResponse({
@@ -84,13 +93,13 @@ export default {
 
       return jsonResponse({
         success: true,
-        message: "Image generated successfully!",
+        message: "Image edited successfully!",
         data: {
-          prompt: result.prompt,
-          model: result.model,
-          image: result.image,
-          ratio: ratio,
-          created_at: result.created_at
+          original_image: image,
+          edited_image: result.image_url,
+          prompt: prompt,
+          model: "nano_banana_pro",
+          timestamp: new Date().toISOString()
         },
         developer: 'Haseeb Sahil',
         channel: '@hsmodzofc2'
@@ -110,145 +119,314 @@ export default {
 };
 
 const CONFIG = {
-  BASE_URL: 'https://api.pixwith.ai',
-  TOKEN: 'a887b936b661edf25d9198bca64c3dec1',
-  USER_AGENT: 'Mozilla/5.0 (Linux; Android 14; Infinix X6833B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Mobile Safari/537.36'
+  BASE_URL: 'https://app.live3d.io',
+  CDN_URL: 'https://temp.live3d.io/',
+  PUBLIC_KEY: `-----BEGIN PUBLIC KEY-----
+MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCwlO+boC6cwRo3UfXVBadaYwcX
+0zKS2fuVNY2qZ0dgwb1NJ+/Q9FeAosL4ONiosD71on3PVYqRUlL5045mvH2K9i8b
+AFVMEip7E6RMK6tKAAif7xzZrXnP1GZ5Rijtqdgwh+YmzTo39cuBCsZqK9oEoeQ3
+r/myG9S+9cR5huTuFQIDAQAB
+-----END PUBLIC KEY-----`,
+  APP_ID: 'aifaceswap',
+  U_ID: '1H5tRtzsBkqXcaJ',
+  TH_VER: '83EmcUoQTUv50LhNx0VrdcK8rcGexcP35FcZDcpgWsAXEyO4xqL5shCY6sFIWB2Q',
+  UA: 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36',
+  ORIGIN_FROM: '8f3f0c7387123ae0'
 };
 
-async function generateImage(prompt, ratio) {
-  const headers = {
-    'Content-Type': 'application/json',
-    'x-session-token': CONFIG.TOKEN,
-    'Origin': 'https://pixwith.ai',
-    'Referer': 'https://pixwith.ai/',
-    'User-Agent': CONFIG.USER_AGENT
-  };
+// Utility functions
+const utils = {
+  randStr: (len) => {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let s = '';
+    for (let i = 0; i < len; i++) {
+      s += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return s;
+  },
 
-  try {
-    // Step 1: Create task
-    console.log('Step 1: Creating task...');
-    
-    const createPayload = {
-      images: {},
-      prompt: prompt,
-      options: { 
-        prompt_optimization: true, 
-        num_outputs: 1, 
-        aspect_ratio: ratio 
-      },
-      model_id: "0-0"
+  async aesEncrypt(data, keyStr) {
+    try {
+      const key = await crypto.subtle.importKey(
+        'raw',
+        new TextEncoder().encode(keyStr.slice(0, 16)),
+        { name: 'AES-CBC' },
+        false,
+        ['encrypt']
+      );
+      
+      const iv = new TextEncoder().encode(keyStr.slice(0, 16));
+      const encoded = new TextEncoder().encode(data);
+      
+      const encrypted = await crypto.subtle.encrypt(
+        { name: 'AES-CBC', iv: iv },
+        key,
+        encoded
+      );
+      
+      return btoa(String.fromCharCode(...new Uint8Array(encrypted)));
+    } catch (error) {
+      // Fallback: simple base64 encoding
+      return btoa(data);
+    }
+  },
+
+  async rsaEncrypt(data) {
+    try {
+      const pem = CONFIG.PUBLIC_KEY;
+      const pemContents = pem
+        .replace('-----BEGIN PUBLIC KEY-----', '')
+        .replace('-----END PUBLIC KEY-----', '')
+        .replace(/\s/g, '');
+      
+      const binaryKey = Uint8Array.from(atob(pemContents), c => c.charCodeAt(0));
+      
+      const publicKey = await crypto.subtle.importKey(
+        'spki',
+        binaryKey,
+        { name: 'RSA-OAEP', hash: 'SHA-1' },
+        false,
+        ['encrypt']
+      );
+      
+      const encoded = new TextEncoder().encode(data);
+      const encrypted = await crypto.subtle.encrypt(
+        { name: 'RSA-OAEP', hash: 'SHA-1' },
+        publicKey,
+        encoded
+      );
+      
+      return btoa(String.fromCharCode(...new Uint8Array(encrypted)));
+    } catch (error) {
+      return btoa(data);
+    }
+  },
+
+  async generateHeaders(type, fp = null) {
+    const now = Math.floor(Date.now() / 1000);
+    const uuid = crypto.randomUUID();
+    const aesKey = utils.randStr(16);
+    const fingerprint = fp || crypto.randomUUID().replace(/-/g, '').slice(0, 32);
+    const xGuide = await utils.rsaEncrypt(aesKey);
+
+    const signStr = type === 'upload'
+      ? `${CONFIG.APP_ID}:${uuid}:${xGuide}`
+      : `${CONFIG.APP_ID}:${CONFIG.U_ID}:${now}:${uuid}:${xGuide}`;
+
+    const fp1 = await utils.aesEncrypt(`${CONFIG.APP_ID}:${fingerprint}`, aesKey);
+    const xSign = await utils.aesEncrypt(signStr, aesKey);
+
+    return {
+      fp: fingerprint,
+      fp1: fp1,
+      'x-guide': xGuide,
+      'x-sign': xSign,
+      'x-code': Date.now().toString()
     };
+  },
 
-    const createResponse = await fetch(`${CONFIG.BASE_URL}/api/items/create`, {
-      method: 'POST',
-      headers: headers,
-      body: JSON.stringify(createPayload)
-    });
-
-    if (!createResponse.ok) {
-      throw new Error(`Create task failed with status: ${createResponse.status}`);
+  async downloadImage(url) {
+    try {
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': CONFIG.UA
+        }
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const buffer = await response.arrayBuffer();
+      return new Uint8Array(buffer);
+    } catch (error) {
+      console.error(`Download Error: ${error.message}`);
+      return null;
     }
+  },
 
-    const createData = await createResponse.json();
-    console.log('Create response:', JSON.stringify(createData));
+  async uploadToCloud(buffer) {
+    try {
+      const filename = `live3d-${crypto.randomUUID()}.png`;
+      const contentType = 'image/png';
+      const fileSize = buffer.byteLength;
 
-    if (createData.code !== 1) {
-      throw new Error(createData.message || 'Create task failed');
-    }
-
-    // Step 2: Poll history until image is ready
-    console.log('Step 2: Waiting for generation...');
-    
-    const maxAttempts = 30; // 30 attempts * 3 seconds = 90 seconds max
-    let attempts = 0;
-    let lastItem = null;
-
-    while (attempts < maxAttempts) {
-      attempts++;
-      await new Promise(r => setTimeout(r, 3000)); // Wait 3 seconds
-
-      const historyPayload = {
-        tool_type: "0",
-        tag: "",
-        page: 0,
-        page_size: 1
-      };
-
-      const historyResponse = await fetch(`${CONFIG.BASE_URL}/api/items/history`, {
+      const uploadUrlResponse = await fetch('https://api.cloudsky.biz.id/get-upload-url', {
         method: 'POST',
-        headers: headers,
-        body: JSON.stringify(historyPayload)
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileKey: filename,
+          contentType: contentType,
+          fileSize: fileSize
+        })
       });
 
-      if (!historyResponse.ok) {
-        console.log(`Attempt ${attempts}: History fetch failed`);
-        continue;
-      }
+      const { uploadUrl } = await uploadUrlResponse.json();
 
-      const historyData = await historyResponse.json();
-      
-      if (historyData.code !== 1) {
-        console.log(`Attempt ${attempts}: Invalid response code`);
-        continue;
-      }
+      await fetch(uploadUrl, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': contentType,
+          'Content-Length': fileSize.toString(),
+          'x-amz-server-side-encryption': 'AES256'
+        },
+        body: buffer
+      });
 
-      const items = historyData.data?.items;
-      if (!items || items.length === 0) {
-        console.log(`Attempt ${attempts}: No items found`);
-        continue;
-      }
+      return `https://api.cloudsky.biz.id/file?key=${encodeURIComponent(filename)}`;
+    } catch (error) {
+      console.error(`Upload Error: ${error.message}`);
+      return null;
+    }
+  }
+};
 
-      const item = items[0];
-      lastItem = item;
-      
-      console.log(`Attempt ${attempts}/${maxAttempts}: Status = ${item.status}`);
+const BASE_HEADERS = {
+  'User-Agent': CONFIG.UA,
+  'Accept': 'application/json, text/plain, */*',
+  'Origin': 'https://live3d.io',
+  'Referer': 'https://live3d.io/',
+  'theme-version': CONFIG.TH_VER,
+};
 
-      // Status 2 = Completed
-      if (item.status === 2 && item.result_urls && item.result_urls.length > 0) {
-        // Verify the prompt matches (approx check)
-        if (item.prompt === prompt || item.prompt.includes(prompt.substring(0, 30))) {
-          console.log('Generation completed successfully!');
-          
-          return {
-            success: true,
-            prompt: item.prompt,
-            model: item.model_name || 'Flux Dev',
-            image: item.result_urls[0].hd || item.result_urls[0].url || item.result_urls[0],
-            created_at: item.created_at || new Date().toISOString()
-          };
-        } else {
-          console.log(`Prompt mismatch: expected "${prompt}", got "${item.prompt}"`);
-          // Continue waiting for correct prompt
-          continue;
-        }
-      }
-      
-      // Status 3 = Failed
-      if (item.status === 3) {
-        throw new Error('Generation failed by server');
-      }
+async function uploadImage(imageBuffer) {
+  const ch = await utils.generateHeaders('upload');
+  
+  const formData = new FormData();
+  const blob = new Blob([imageBuffer], { type: 'image/jpeg' });
+  formData.append('file', blob, `upload_${Date.now()}.jpg`);
+  formData.append('fn_name', 'demo-image-editor');
+  formData.append('request_from', '9');
+  formData.append('origin_from', CONFIG.ORIGIN_FROM);
+
+  const response = await fetch(`${CONFIG.BASE_URL}/aitools/upload-img`, {
+    method: 'POST',
+    headers: { ...BASE_HEADERS, ...ch },
+    body: formData
+  });
+
+  const data = await response.json();
+  
+  if (!data?.data?.path) {
+    throw new Error('Upload failed: ' + JSON.stringify(data));
+  }
+  
+  return { path: data.data.path, fp: ch.fp };
+}
+
+async function createJob(remotePath, prompt, fp) {
+  const ch = await utils.generateHeaders('create', fp);
+  
+  const payload = {
+    fn_name: 'demo-image-editor',
+    call_type: 3,
+    input: {
+      model: 'nano_banana_pro',
+      source_images: [remotePath],
+      prompt: prompt,
+      aspect_radio: 'auto',
+      request_from: 9,
+    },
+    request_from: 9,
+    origin_from: CONFIG.ORIGIN_FROM,
+  };
+
+  const response = await fetch(`${CONFIG.BASE_URL}/aitools/of/create`, {
+    method: 'POST',
+    headers: { ...BASE_HEADERS, 'Content-Type': 'application/json', ...ch },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await response.json();
+  
+  if (!data?.data?.task_id) {
+    throw new Error('Job creation failed: ' + JSON.stringify(data));
+  }
+  
+  return data.data.task_id;
+}
+
+async function checkJob(taskId, fp) {
+  const ch = await utils.generateHeaders('check', fp);
+  
+  const payload = {
+    task_id: taskId,
+    fn_name: 'demo-image-editor',
+    call_type: 3,
+    request_from: 9,
+    origin_from: CONFIG.ORIGIN_FROM,
+  };
+
+  const response = await fetch(`${CONFIG.BASE_URL}/aitools/of/check-status`, {
+    method: 'POST',
+    headers: { ...BASE_HEADERS, 'Content-Type': 'application/json', ...ch },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await response.json();
+  return data?.data;
+}
+
+async function live3dEdit(imageUrl, prompt) {
+  try {
+    // Step 1: Download image
+    console.log('Step 1: Downloading image...');
+    const imageBuffer = await utils.downloadImage(imageUrl);
+    if (!imageBuffer) {
+      return { success: false, error: 'Failed to download image' };
     }
 
-    // Timeout reached
-    if (lastItem) {
-      return {
-        success: false,
-        error: `Generation timeout. Last status: ${lastItem.status}`,
-        details: lastItem
-      };
+    // Step 2: Upload to Live3D
+    console.log('Step 2: Uploading to Live3D...');
+    const upload = await uploadImage(imageBuffer);
+    
+    // Step 3: Create job
+    console.log('Step 3: Creating edit job...');
+    const taskId = await createJob(upload.path, prompt, upload.fp);
+    
+    // Step 4: Poll for result
+    console.log('Step 4: Waiting for result...');
+    let result;
+    let attempts = 0;
+    const maxAttempts = 30;
+    
+    do {
+      await new Promise(r => setTimeout(r, 4000));
+      result = await checkJob(taskId, upload.fp);
+      attempts++;
+      console.log(`Attempt ${attempts}/${maxAttempts}: Status = ${result?.status}`);
+      
+      if (attempts >= maxAttempts) {
+        throw new Error('Timeout - Server taking too long to respond');
+      }
+    } while (result?.status !== 2);
+    
+    if (!result?.result_image) {
+      throw new Error('No result received from server');
     }
-
+    
+    // Step 5: Get result URL
+    const resultUrl = CONFIG.CDN_URL + result.result_image;
+    console.log('Step 5: Downloading result...');
+    
+    // Step 6: Download and upload to cloud
+    const resultBuffer = await utils.downloadImage(resultUrl);
+    if (!resultBuffer) {
+      return { success: false, error: 'Failed to download result' };
+    }
+    
+    const cloudUrl = await utils.uploadToCloud(resultBuffer);
+    if (!cloudUrl) {
+      return { success: false, error: 'Failed to upload to cloud' };
+    }
+    
     return {
-      success: false,
-      error: 'Timeout waiting for image generation'
+      success: true,
+      image_url: cloudUrl,
+      original_url: resultUrl,
+      task_id: taskId,
+      attempts: attempts
     };
-
+    
   } catch (error) {
-    console.error(`Generation Error: ${error.message}`);
-    return {
-      success: false,
-      error: error.message
-    };
+    console.error(`Live3D Error: ${error.message}`);
+    return { success: false, error: error.message };
   }
 }
 
