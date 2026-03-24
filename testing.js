@@ -1,517 +1,397 @@
-// Cloudflare Worker for Live3D AI Image Editing API
-// Supports both GET and POST methods
+// Cloudflare Worker for PixWithAI - Image to Image Transformation
+// Developer: Haseeb Sahil
+// Channel: @hsmodzofc2
 
-// Configuration
-const PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
-MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCwlO+boC6cwRo3UfXVBadaYwcX
-0zKS2fuVNY2qZ0dgwb1NJ+/Q9FeAosL4ONiosD71on3PVYqRUlL5045mvH2K9i8b
-AFVMEip7E6RMK6tKAAif7xzZrXnP1GZ5Rijtqdgwh+YmzTo39cuBCsZqK9oEoeQ3
-r/myG9S+9cR5huTuFQIDAQAB
------END PUBLIC KEY-----`;
+export default {
+  async fetch(request, env, ctx) {
+    // Handle CORS preflight
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type',
+        },
+      });
+    }
 
-const APP_ID = 'aifaceswap';
-const U_ID = '1H5tRtzsBkqXcaJ';
-const TH_VER = '83EmcUoQTUv50LhNx0VrdcK8rcGexcP35FcZDcpgWsAXEyO4xqL5shCY6sFIWB2Q';
-const UA = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36';
-const BASE_URL = 'https://app.live3d.io';
+    // Only allow GET requests
+    if (request.method !== 'GET') {
+      return jsonResponse({
+        success: false,
+        error: 'Method not allowed. Only GET requests are supported.',
+        developer: 'Haseeb Sahil',
+        channel: '@hsmodzofc2'
+      }, 405);
+    }
 
-// Helper: Random string generator
-function randStr(len) {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    let s = '';
-    for (let i = 0; i < len; i++) {
-        s += chars[Math.floor(Math.random() * chars.length)];
+    const url = new URL(request.url);
+    const image = url.searchParams.get('image');
+    const prompt = url.searchParams.get('prompt') || "transform this image";
+
+    // Validation
+    if (!image) {
+      return jsonResponse({
+        success: false,
+        error: 'Image parameter is required. Please provide an image URL.',
+        example: 'https://your-worker.workers.dev/?image=https://example.com/image.jpg&prompt=make it cartoon style',
+        developer: 'Haseeb Sahil',
+        channel: '@hsmodzofc2'
+      }, 400);
+    }
+
+    // Validate image URL
+    if (!image.startsWith('http')) {
+      return jsonResponse({
+        success: false,
+        error: 'Only HTTP/HTTPS image URLs are supported.',
+        developer: 'Haseeb Sahil',
+        channel: '@hsmodzofc2'
+      }, 400);
+    }
+
+    // Validate prompt length
+    if (prompt.length < 3) {
+      return jsonResponse({
+        success: false,
+        error: 'Prompt must be at least 3 characters long.',
+        developer: 'Haseeb Sahil',
+        channel: '@hsmodzofc2'
+      }, 400);
+    }
+
+    if (prompt.length > 500) {
+      return jsonResponse({
+        success: false,
+        error: 'Prompt is too long. Maximum 500 characters allowed.',
+        developer: 'Haseeb Sahil',
+        channel: '@hsmodzofc2'
+      }, 400);
+    }
+
+    try {
+      const result = await img2imgTransform(image, prompt);
+
+      if (!result.success) {
+        return jsonResponse({
+          success: false,
+          error: result.error,
+          developer: 'Haseeb Sahil',
+          channel: '@hsmodzofc2'
+        }, 500);
+      }
+
+      return jsonResponse({
+        success: true,
+        message: "Image transformed successfully!",
+        data: {
+          original_image: image,
+          transformed_image: result.image_url,
+          prompt: result.prompt,
+          model: result.model,
+          timestamp: new Date().toISOString()
+        },
+        developer: 'Haseeb Sahil',
+        channel: '@hsmodzofc2'
+      });
+
+    } catch (error) {
+      console.error(`API Error: ${error.message}`);
+      return jsonResponse({
+        success: false,
+        error: 'An unexpected error occurred. Please try again later.',
+        details: error.message,
+        developer: 'Haseeb Sahil',
+        channel: '@hsmodzofc2'
+      }, 500);
+    }
+  }
+};
+
+const CONFIG = {
+  BASE_URL: 'https://api.pixwith.ai',
+  TOKEN: '2d27429c20f2ac52625f95182b8f0f861',
+  USER_AGENT: 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36'
+};
+
+const utils = {
+  genMD5: () => {
+    let s = "";
+    const chars = "0123456789abcdef";
+    for (let i = 0; i < 32; i++) {
+      s += chars[Math.floor(Math.random() * 16)];
     }
     return s;
-}
+  },
 
-// Helper: AES-CBC encryption (using Web Crypto API)
-async function aesenc(data, keyStr) {
-    const key = await crypto.subtle.importKey(
-        'raw',
-        new TextEncoder().encode(keyStr),
-        { name: 'AES-CBC' },
-        false,
-        ['encrypt']
-    );
-    
-    const iv = new TextEncoder().encode(keyStr);
-    const encrypted = await crypto.subtle.encrypt(
-        { name: 'AES-CBC', iv: iv },
-        key,
-        new TextEncoder().encode(data)
-    );
-    
-    return btoa(String.fromCharCode(...new Uint8Array(encrypted)));
-}
-
-// Helper: RSA encryption (using Web Crypto API)
-async function rsaenc(data) {
-    const pemToBuffer = (pem) => {
-        const pemContent = pem.replace(/-----BEGIN PUBLIC KEY-----/, '')
-            .replace(/-----END PUBLIC KEY-----/, '')
-            .replace(/\s/g, '');
-        return Uint8Array.from(atob(pemContent), c => c.charCodeAt(0));
-    };
-    
-    const publicKeyBuffer = pemToBuffer(PUBLIC_KEY);
-    
-    const publicKey = await crypto.subtle.importKey(
-        'spki',
-        publicKeyBuffer,
-        { name: 'RSA-OAEP', hash: 'SHA-1' },
-        false,
-        ['encrypt']
-    );
-    
-    const encrypted = await crypto.subtle.encrypt(
-        { name: 'RSA-OAEP' },
-        publicKey,
-        new TextEncoder().encode(data)
-    );
-    
-    return btoa(String.fromCharCode(...new Uint8Array(encrypted)));
-}
-
-// Generate request headers
-async function genHeaders(type, fp = null) {
-    const now = Math.floor(Date.now() / 1000);
-    const uuid = crypto.randomUUID();
-    const aesKey = randStr(16);
-    const fingerprint = fp || [...Array(16)].map(() => Math.floor(Math.random() * 256).toString(16).padStart(2, '0')).join('');
-    const xGuide = await rsaenc(aesKey);
-    
-    const signStr = type === 'upload'
-        ? `${APP_ID}:${uuid}:${xGuide}`
-        : `${APP_ID}:${U_ID}:${now}:${uuid}:${xGuide}`;
-    
-    return {
-        fp: fingerprint,
-        fp1: await aesenc(`${APP_ID}:${fingerprint}`, aesKey),
-        'x-guide': xGuide,
-        'x-sign': await aesenc(signStr, aesKey),
-        'x-code': Date.now().toString(),
-    };
-}
-
-// Upload image to Live3D
-async function uploadImage(imageBuffer, filename) {
-    const ch = await genHeaders('upload');
-    
-    const formData = new FormData();
-    formData.append('file', new Blob([imageBuffer], { type: 'image/jpeg' }), filename);
-    formData.append('fn_name', 'demo-image-editor');
-    formData.append('request_from', '9');
-    formData.append('origin_from', '8f3f0c7387123ae0');
-    
-    const response = await fetch(`${BASE_URL}/aitools/upload-img`, {
-        method: 'POST',
-        headers: {
-            'User-Agent': UA,
-            'Accept': 'application/json, text/plain, */*',
-            'origin': 'https://live3d.io',
-            'referer': 'https://live3d.io/',
-            'theme-version': TH_VER,
-            ...ch,
-        },
-        body: formData,
-    });
-    
-    const result = await response.json();
-    
-    if (!result?.data?.path) {
-        throw new Error('Upload failed: ' + JSON.stringify(result));
-    }
-    
-    return { path: result.data.data.path, fp: ch.fp };
-}
-
-// Create AI editing job
-async function createJob(remotePath, prompt, fp) {
-    const ch = await genHeaders('create', fp);
-    
-    const payload = {
-        fn_name: 'demo-image-editor',
-        call_type: 3,
-        input: {
-            model: 'nano_banana_pro',
-            source_images: [remotePath],
-            prompt: prompt,
-            aspect_radio: 'auto',
-            request_from: 9,
-        },
-        request_from: 9,
-        origin_from: '8f3f0c7387123ae0',
-    };
-    
-    const response = await fetch(`${BASE_URL}/aitools/of/create`, {
-        method: 'POST',
-        headers: {
-            'User-Agent': UA,
-            'Accept': 'application/json, text/plain, */*',
-            'origin': 'https://live3d.io',
-            'referer': 'https://live3d.io/',
-            'theme-version': TH_VER,
-            'Content-Type': 'application/json',
-            ...ch,
-        },
-        body: JSON.stringify(payload),
-    });
-    
-    const result = await response.json();
-    
-    if (!result?.data?.task_id) {
-        throw new Error('Job creation failed: ' + JSON.stringify(result));
-    }
-    
-    return result.data.data.task_id;
-}
-
-// Check job status
-async function checkJob(taskId, fp) {
-    const ch = await genHeaders('check', fp);
-    
-    const payload = {
-        task_id: taskId,
-        fn_name: 'demo-image-editor',
-        call_type: 3,
-        request_from: 9,
-        origin_from: '8f3f0c7387123ae0',
-    };
-    
-    const response = await fetch(`${BASE_URL}/aitools/of/check-status`, {
-        method: 'POST',
-        headers: {
-            'User-Agent': UA,
-            'Accept': 'application/json, text/plain, */*',
-            'origin': 'https://live3d.io',
-            'referer': 'https://live3d.io/',
-            'theme-version': TH_VER,
-            'Content-Type': 'application/json',
-            ...ch,
-        },
-        body: JSON.stringify(payload),
-    });
-    
-    const result = await response.json();
-    return result?.data?.data;
-}
-
-// Main processing function
-async function processImage(imageBuffer, prompt, filename = 'image.jpg') {
+  async downloadImage(url) {
     try {
-        // Step 1: Upload image
-        const upload = await uploadImage(imageBuffer, filename);
-        
-        // Step 2: Create job
-        const taskId = await createJob(upload.path, prompt, upload.fp);
-        
-        // Step 3: Poll for result
-        let result;
-        let tries = 0;
-        const maxTries = 30;
-        
-        do {
-            await new Promise(r => setTimeout(r, 4000));
-            result = await checkJob(taskId, upload.fp);
-            tries++;
-            
-            if (tries > maxTries) {
-                throw new Error('Timeout - Server taking too long to respond');
-            }
-        } while (result?.status !== 2);
-        
-        if (!result?.result_image) {
-            throw new Error('No result received from server');
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': CONFIG.USER_AGENT
         }
-        
-        // Step 4: Fetch result image
-        const resultUrl = 'https://temp.live3d.io/' + result.result_image;
-        const imageResponse = await fetch(resultUrl);
-        const resultBuffer = await imageResponse.arrayBuffer();
-        
-        return {
-            success: true,
-            image: resultBuffer,
-            url: resultUrl,
-        };
-        
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      
+      const contentType = response.headers.get('content-type');
+      if (contentType && contentType.includes('text/html')) {
+        throw new Error('URL returned HTML instead of image');
+      }
+      
+      const buffer = await response.arrayBuffer();
+      return new Uint8Array(buffer);
     } catch (error) {
-        return {
-            success: false,
-            error: error.message,
-        };
+      console.error(`Download Error: ${error.message}`);
+      return null;
     }
-}
+  },
 
-// Helper: Convert base64 to buffer
-function base64ToBuffer(base64) {
-    const binaryString = atob(base64);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-    }
-    return bytes.buffer;
-}
-
-// Handle GET request
-async function handleGet(request, url) {
-    const prompt = url.searchParams.get('prompt');
-    const imageUrl = url.searchParams.get('image_url');
-    const imageBase64 = url.searchParams.get('image_base64');
-    
-    // Validate required fields
-    if (!prompt) {
-        return new Response(JSON.stringify({ 
-            error: 'Missing required field: prompt',
-            usage: {
-                method: 'GET',
-                params: {
-                    prompt: 'text (required)',
-                    image_url: 'url to image (required if no image_base64)',
-                    image_base64: 'base64 encoded image (required if no image_url)'
-                },
-                example: '/?prompt=make%20him%20smile&image_url=https://example.com/image.jpg'
-            }
-        }), {
-            status: 400,
-            headers: { 'Content-Type': 'application/json' },
-        });
-    }
-    
-    if (!imageUrl && !imageBase64) {
-        return new Response(JSON.stringify({ 
-            error: 'Missing required field: either image_url or image_base64 is required'
-        }), {
-            status: 400,
-            headers: { 'Content-Type': 'application/json' },
-        });
-    }
-    
+  async uploadToCloud(buffer) {
     try {
-        let imageBuffer;
-        
-        // Get image from URL
-        if (imageUrl) {
-            const imageResponse = await fetch(imageUrl);
-            if (!imageResponse.ok) {
-                throw new Error(`Failed to fetch image from URL: ${imageResponse.status}`);
-            }
-            imageBuffer = await imageResponse.arrayBuffer();
-        }
-        // Get image from base64
-        else if (imageBase64) {
-            imageBuffer = base64ToBuffer(imageBase64);
-        }
-        
-        // Process the image
-        const result = await processImage(imageBuffer, prompt, 'image.jpg');
-        
-        if (!result.success) {
-            return new Response(JSON.stringify({ error: result.error }), {
-                status: 500,
-                headers: { 'Content-Type': 'application/json' },
-            });
-        }
-        
-        // Return success response
-        const base64Image = btoa(String.fromCharCode(...new Uint8Array(result.image)));
-        
-        return new Response(JSON.stringify({
-            success: true,
-            image: `data:image/jpeg;base64,${base64Image}`,
-            url: result.url,
-            prompt: prompt,
-        }), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-        });
-        
-    } catch (error) {
-        console.error('GET request error:', error);
-        
-        return new Response(JSON.stringify({ 
-            error: 'Processing failed',
-            details: error.message 
-        }), {
-            status: 500,
-            headers: { 'Content-Type': 'application/json' },
-        });
-    }
-}
+      const filename = `piximg-${crypto.randomUUID()}.png`;
+      const contentType = 'image/png';
+      const fileSize = buffer.byteLength;
 
-// Handle POST request
-async function handlePost(request) {
+      const uploadUrlResponse = await fetch('https://api.cloudsky.biz.id/get-upload-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileKey: filename,
+          contentType: contentType,
+          fileSize: fileSize
+        })
+      });
+
+      const { uploadUrl } = await uploadUrlResponse.json();
+
+      await fetch(uploadUrl, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': contentType,
+          'Content-Length': fileSize.toString(),
+          'x-amz-server-side-encryption': 'AES256'
+        },
+        body: buffer
+      });
+
+      return `https://api.cloudsky.biz.id/file?key=${encodeURIComponent(filename)}`;
+    } catch (error) {
+      console.error(`Upload Error: ${error.message}`);
+      return null;
+    }
+  },
+
+  async makeRequest(url, options, isJson = true) {
     try {
-        const formData = await request.formData();
-        const imageFile = formData.get('image');
-        const prompt = formData.get('prompt');
-        
-        // Validate inputs
-        if (!imageFile || !prompt) {
-            return new Response(JSON.stringify({ 
-                error: 'Missing required fields',
-                required: ['image', 'prompt']
-            }), {
-                status: 400,
-                headers: { 'Content-Type': 'application/json' },
-            });
-        }
-        
-        // Validate image type
-        if (!imageFile.type.startsWith('image/')) {
-            return new Response(JSON.stringify({ error: 'File must be an image' }), {
-                status: 400,
-                headers: { 'Content-Type': 'application/json' },
-            });
-        }
-        
-        // Get image buffer
-        const imageBuffer = await imageFile.arrayBuffer();
-        const filename = imageFile.name || 'image.jpg';
-        
-        // Process image
-        const result = await processImage(imageBuffer, prompt, filename);
-        
-        if (!result.success) {
-            return new Response(JSON.stringify({ error: result.error }), {
-                status: 500,
-                headers: { 'Content-Type': 'application/json' },
-            });
-        }
-        
-        // Return success response
-        const base64Image = btoa(String.fromCharCode(...new Uint8Array(result.image)));
-        
-        return new Response(JSON.stringify({
-            success: true,
-            image: `data:image/jpeg;base64,${base64Image}`,
-            url: result.url,
-            prompt: prompt,
-        }), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-        });
-        
+      const response = await fetch(url, options);
+      const text = await response.text();
+      
+      if (!isJson) {
+        return { success: response.ok, data: text, status: response.status };
+      }
+      
+      try {
+        const data = JSON.parse(text);
+        return { success: response.ok, data: data, status: response.status };
+      } catch (e) {
+        return { success: false, error: 'Invalid JSON response', raw: text.substring(0, 200) };
+      }
     } catch (error) {
-        console.error('POST request error:', error);
-        
-        return new Response(JSON.stringify({ 
-            error: 'Internal server error',
-            details: error.message 
-        }), {
-            status: 500,
-            headers: { 'Content-Type': 'application/json' },
-        });
+      return { success: false, error: error.message };
     }
-}
-
-// Cloudflare Worker handler
-export default {
-    async fetch(request, env, ctx) {
-        // CORS headers
-        const corsHeaders = {
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-            'Access-Control-Allow-Headers': 'Content-Type',
-        };
-        
-        // Handle preflight
-        if (request.method === 'OPTIONS') {
-            return new Response(null, { headers: corsHeaders });
-        }
-        
-        const url = new URL(request.url);
-        
-        // Serve homepage with documentation for GET requests without params
-        if (request.method === 'GET' && url.pathname === '/' && !url.searchParams.has('prompt')) {
-            const html = `
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Live3D AI Image Editor API</title>
-                <style>
-                    body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-                    h1 { color: #333; }
-                    .endpoint { background: #f4f4f4; padding: 10px; border-radius: 5px; margin: 10px 0; }
-                    code { background: #e0e0e0; padding: 2px 5px; border-radius: 3px; }
-                    pre { background: #333; color: #fff; padding: 10px; border-radius: 5px; overflow-x: auto; }
-                </style>
-            </head>
-            <body>
-                <h1>🎨 Live3D AI Image Editor API</h1>
-                <p>Transform images with AI-powered editing!</p>
-                
-                <h2>📡 Endpoint</h2>
-                <div class="endpoint">
-                    <code>${url.origin}</code>
-                </div>
-                
-                <h2>📤 POST Method (File Upload)</h2>
-                <pre>
-curl -X POST ${url.origin} \\
-  -F "image=@/path/to/image.jpg" \\
-  -F "prompt=make him smile"</pre>
-                
-                <h2>🌐 GET Method (URL or Base64)</h2>
-                <pre>
-# Using image URL
-curl "${url.origin}/?prompt=add%20sunglasses&image_url=https://example.com/image.jpg"
-
-# Using base64 image
-curl "${url.origin}/?prompt=change%20background&image_base64=data:image/jpeg;base64,/9j/4AAQ..."</pre>
-                
-                <h2>📝 Response Format</h2>
-                <pre>
-{
-  "success": true,
-  "image": "data:image/jpeg;base64,...",
-  "url": "https://temp.live3d.io/...",
-  "prompt": "your prompt"
-}</pre>
-                
-                <h2>✨ Example Prompts</h2>
-                <ul>
-                    <li><code>make him smile</code></li>
-                    <li><code>add sunglasses</code></li>
-                    <li><code>change background to beach</code></li>
-                    <li><code>put a hat on his head</code></li>
-                    <li><code>make her look like a cartoon</code></li>
-                </ul>
-                
-                <p>⚡ Powered by Live3D AI | Cloudflare Worker</p>
-            </body>
-            </html>
-            `;
-            
-            return new Response(html, {
-                status: 200,
-                headers: { 'Content-Type': 'text/html', ...corsHeaders },
-            });
-        }
-        
-        // Route requests
-        try {
-            if (request.method === 'GET') {
-                return await handleGet(request, url);
-            } else if (request.method === 'POST') {
-                return await handlePost(request);
-            } else {
-                return new Response(JSON.stringify({ error: 'Method not allowed' }), {
-                    status: 405,
-                    headers: { 'Content-Type': 'application/json', ...corsHeaders },
-                });
-            }
-        } catch (error) {
-            console.error('Worker error:', error);
-            
-            return new Response(JSON.stringify({ 
-                error: 'Internal server error',
-                details: error.message 
-            }), {
-                status: 500,
-                headers: { 'Content-Type': 'application/json', ...corsHeaders },
-            });
-        }
-    },
+  }
 };
+
+async function img2imgTransform(imageUrl, prompt) {
+  const headers = {
+    'User-Agent': CONFIG.USER_AGENT,
+    'Content-Type': 'application/json',
+    'Origin': 'https://pixwith.ai',
+    'Referer': 'https://pixwith.ai/',
+    'Accept-Language': 'id-ID,id;q=0.9',
+    'x-session-token': CONFIG.TOKEN
+  };
+
+  try {
+    // Step 1: Download image
+    console.log('Step 1: Downloading image...');
+    const imageBuffer = await utils.downloadImage(imageUrl);
+    if (!imageBuffer) {
+      return { success: false, error: 'Failed to download image from URL' };
+    }
+
+    // Step 2: Get S3 presigned URL
+    console.log('Step 2: Getting upload URL...');
+    const filename = utils.genMD5() + '.jpg';
+    
+    const preResult = await utils.makeRequest(`${CONFIG.BASE_URL}/api/chats/pre_url`, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify({ 
+        image_name: filename, 
+        content_type: 'image/jpeg' 
+      })
+    });
+
+    if (!preResult.success || !preResult.data?.data?.url) {
+      console.log('Pre URL failed:', preResult);
+      return { 
+        success: false, 
+        error: 'Failed to get upload URL',
+        details: preResult.error
+      };
+    }
+
+    const uploadData = preResult.data.data.url;
+    if (!uploadData.fields) {
+      return { success: false, error: 'Invalid upload data received' };
+    }
+
+    // Step 3: Upload to S3 via multipart form
+    console.log('Step 3: Uploading to S3...');
+    const formData = new FormData();
+    Object.entries(uploadData.fields).forEach(([key, value]) => {
+      formData.append(key, value);
+    });
+    
+    const blob = new Blob([imageBuffer], { type: 'image/jpeg' });
+    formData.append('file', blob, filename);
+
+    const s3Response = await fetch(uploadData.url, {
+      method: 'POST',
+      body: formData
+    });
+
+    if (s3Response.status !== 204) {
+      const s3Text = await s3Response.text();
+      console.log('S3 Upload failed:', s3Text);
+      return { success: false, error: `S3 upload failed: ${s3Response.status}` };
+    }
+
+    const imageKey = uploadData.fields.key;
+    console.log('Upload successful, key:', imageKey);
+
+    // Step 4: Get last UID before create
+    console.log('Step 4: Getting last UID...');
+    const beforeResult = await utils.makeRequest(`${CONFIG.BASE_URL}/api/items/history`, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify({ 
+        tool_type: '1', 
+        tag: '', 
+        page: 0, 
+        page_size: 1 
+      })
+    });
+
+    let lastUid = null;
+    if (beforeResult.success && beforeResult.data?.data?.items?.length > 0) {
+      lastUid = beforeResult.data.data.items[0].uid;
+    }
+
+    // Step 5: Create task
+    console.log('Step 5: Creating transformation task...');
+    const createPayload = {
+      images: { image1: imageKey },
+      prompt: prompt,
+      options: { 
+        prompt_optimization: true, 
+        num_outputs: 1, 
+        aspect_ratio: '0' 
+      },
+      model_id: '1-0'
+    };
+
+    const createResult = await utils.makeRequest(`${CONFIG.BASE_URL}/api/items/create`, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify(createPayload)
+    });
+
+    if (!createResult.success) {
+      console.log('Create task failed:', createResult);
+      return { success: false, error: 'Failed to create transformation task' };
+    }
+
+    // Step 6: Poll for result
+    console.log('Step 6: Waiting for result...');
+    let result = null;
+    const maxAttempts = 25;
+    
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise(r => setTimeout(r, 5000));
+      
+      const historyResult = await utils.makeRequest(`${CONFIG.BASE_URL}/api/items/history`, {
+        method: 'POST',
+        headers: headers,
+        body: JSON.stringify({ 
+          tool_type: '1', 
+          tag: '', 
+          page: 0, 
+          page_size: 1 
+        })
+      });
+
+      if (historyResult.success && historyResult.data?.data?.items?.length > 0) {
+        const item = historyResult.data.data.items[0];
+        
+        // Check if this is a new item (not the one we had before)
+        if (item.uid !== lastUid && item.status === 2) {
+          const output = item.result_urls?.find(u => !u.is_input);
+          if (output) {
+            result = { item, url: output.hd };
+            console.log(`Result found on attempt ${i + 1}`);
+            break;
+          }
+        }
+        
+        console.log(`Attempt ${i + 1}/${maxAttempts}: Status = ${item.status}`);
+        
+        // Status 3 = Failed
+        if (item.status === 3) {
+          return { success: false, error: 'Transformation failed by server' };
+        }
+      }
+    }
+
+    if (!result) {
+      return { success: false, error: `Timeout after ${maxAttempts} attempts` };
+    }
+
+    // Step 7: Download result and upload to cloud
+    console.log('Step 7: Processing final image...');
+    const resultBuffer = await utils.downloadImage(result.url);
+    if (!resultBuffer) {
+      return { success: false, error: 'Failed to download result image' };
+    }
+
+    const cloudUrl = await utils.uploadToCloud(resultBuffer);
+    if (!cloudUrl) {
+      return { success: false, error: 'Failed to upload to cloud storage' };
+    }
+
+    return {
+      success: true,
+      image_url: cloudUrl,
+      original_url: result.url,
+      prompt: result.item.prompt,
+      model: result.item.model_name || 'Flux'
+    };
+
+  } catch (error) {
+    console.error(`Img2Img Error: ${error.message}`);
+    return { success: false, error: error.message };
+  }
+}
+
+function jsonResponse(data, status = 200) {
+  return new Response(JSON.stringify(data, null, 2), {
+    status: status,
+    headers: {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'X-Developer': 'Haseeb Sahil',
+      'X-Channel': '@hsmodzofc2'
+    }
+  });
+}
