@@ -1,4 +1,4 @@
-// Cloudflare Worker for PixWithAI - Image to Image Transformation
+// Cloudflare Worker for Nanana AI - Image to Image Transformation
 // Developer: Haseeb Sahil
 // Channel: @hsmodzofc2
 
@@ -27,14 +27,24 @@ export default {
 
     const url = new URL(request.url);
     const image = url.searchParams.get('image');
-    const prompt = url.searchParams.get('prompt') || "transform this image";
+    const prompt = url.searchParams.get('prompt');
 
     // Validation
     if (!image) {
       return jsonResponse({
         success: false,
         error: 'Image parameter is required. Please provide an image URL.',
-        example: 'https://your-worker.workers.dev/?image=https://example.com/image.jpg&prompt=make it cartoon style',
+        example: 'https://your-worker.workers.dev/?image=https://example.com/image.jpg&prompt=make it anime style',
+        developer: 'Haseeb Sahil',
+        channel: '@hsmodzofc2'
+      }, 400);
+    }
+
+    if (!prompt) {
+      return jsonResponse({
+        success: false,
+        error: 'Prompt parameter is required. Describe what you want.',
+        example: 'anime style, cartoon, realistic, etc.',
         developer: 'Haseeb Sahil',
         channel: '@hsmodzofc2'
       }, 400);
@@ -50,8 +60,27 @@ export default {
       }, 400);
     }
 
+    // Validate prompt length
+    if (prompt.length < 3) {
+      return jsonResponse({
+        success: false,
+        error: 'Prompt must be at least 3 characters long.',
+        developer: 'Haseeb Sahil',
+        channel: '@hsmodzofc2'
+      }, 400);
+    }
+
+    if (prompt.length > 500) {
+      return jsonResponse({
+        success: false,
+        error: 'Prompt is too long. Maximum 500 characters allowed.',
+        developer: 'Haseeb Sahil',
+        channel: '@hsmodzofc2'
+      }, 400);
+    }
+
     try {
-      const result = await img2imgTransform(image, prompt);
+      const result = await nananaTransform(image, prompt);
 
       if (!result.success) {
         return jsonResponse({
@@ -69,8 +98,8 @@ export default {
         data: {
           original_image: image,
           transformed_image: result.image_url,
-          prompt: result.prompt,
-          model: result.model,
+          prompt: prompt,
+          job_id: result.job_id,
           timestamp: new Date().toISOString()
         },
         developer: 'Haseeb Sahil',
@@ -91,19 +120,18 @@ export default {
 };
 
 const CONFIG = {
-  BASE_URL: 'https://api.pixwith.ai',
-  TOKEN: '2d27429c20f2ac52625f95182b8f0f861',
+  BASE_URL: 'https://nanana.app',
+  AKUNLAMA_URL: 'https://akunlama.com',
   USER_AGENT: 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36'
 };
 
 const utils = {
-  genMD5: () => {
-    let s = "";
-    const chars = "0123456789abcdef";
-    for (let i = 0; i < 32; i++) {
-      s += chars[Math.floor(Math.random() * 16)];
-    }
-    return s;
+  delay: (ms) => new Promise(resolve => setTimeout(resolve, ms)),
+
+  genXfpid: () => {
+    const p1 = crypto.randomUUID().replace(/-/g, '').slice(0, 32);
+    const p2 = crypto.randomUUID().replace(/-/g, '');
+    return btoa(`${p1}.${p2}`);
   },
 
   async downloadImage(url) {
@@ -130,7 +158,7 @@ const utils = {
 
   async uploadToCloud(buffer) {
     try {
-      const filename = `piximg-${crypto.randomUUID()}.png`;
+      const filename = `nanana-${crypto.randomUUID()}.png`;
       const contentType = 'image/png';
       const fileSize = buffer.byteLength;
 
@@ -168,9 +196,6 @@ const utils = {
       const response = await fetch(url, options);
       const text = await response.text();
       
-      console.log(`Request to ${url}: Status ${response.status}`);
-      console.log(`Response preview: ${text.substring(0, 200)}`);
-      
       try {
         const data = JSON.parse(text);
         return { success: response.ok, data: data, status: response.status };
@@ -178,232 +203,245 @@ const utils = {
         return { 
           success: false, 
           error: 'Invalid JSON response', 
-          raw: text.substring(0, 500),
+          raw: text.substring(0, 200),
           status: response.status 
         };
       }
     } catch (error) {
-      console.error(`Request Error: ${error.message}`);
       return { success: false, error: error.message };
     }
   }
 };
 
-async function img2imgTransform(imageUrl, prompt) {
-  const headers = {
-    'User-Agent': CONFIG.USER_AGENT,
-    'Content-Type': 'application/json',
-    'Origin': 'https://pixwith.ai',
-    'Referer': 'https://pixwith.ai/',
-    'Accept-Language': 'id-ID,id;q=0.9',
-    'x-session-token': CONFIG.TOKEN
-  };
+// Nanana Auth Functions
+const nananaAuth = {
+  getOTP: async (username) => {
+    const url = `${CONFIG.AKUNLAMA_URL}/api/v1/mail/list?recipient=${username}`;
+    
+    for (let i = 0; i < 20; i++) {
+      const result = await utils.makeRequest(url, {
+        method: 'GET',
+        headers: { 'User-Agent': CONFIG.USER_AGENT }
+      });
+      
+      if (result.success && result.data && result.data.length > 0) {
+        const { region, key } = result.data[0].storage;
+        const htmlResult = await utils.makeRequest(
+          `${CONFIG.AKUNLAMA_URL}/api/v1/mail/getHtml?region=${region}&key=${key}`,
+          { method: 'GET', headers: { 'User-Agent': CONFIG.USER_AGENT } }
+        );
+        
+        if (htmlResult.success && htmlResult.data) {
+          const html = htmlResult.data;
+          const otpMatch = html.match(/\b\d{6}\b/);
+          if (otpMatch) return otpMatch[0];
+        }
+      }
+      
+      await utils.delay(3000);
+    }
+    throw new Error('OTP Timeout!');
+  },
 
+  getHeaders: async () => {
+    try {
+      const username = crypto.randomUUID().replace(/-/g, '').slice(0, 12);
+      const email = `${username}@akunlama.com`;
+      
+      // Send OTP
+      const sendResult = await utils.makeRequest(`${CONFIG.BASE_URL}/api/auth/email-otp/send-verification-otp`, {
+        method: 'POST',
+        headers: {
+          'User-Agent': CONFIG.USER_AGENT,
+          'Content-Type': 'application/json',
+          'Origin': 'https://nanana.app',
+          'Referer': 'https://nanana.app/en'
+        },
+        body: JSON.stringify({ email, type: 'sign-in' })
+      });
+      
+      if (!sendResult.success) {
+        throw new Error('Failed to send OTP');
+      }
+      
+      // Get OTP from email
+      const otp = await nananaAuth.getOTP(username);
+      
+      // Login with OTP
+      const loginResult = await utils.makeRequest(`${CONFIG.BASE_URL}/api/auth/sign-in/email-otp`, {
+        method: 'POST',
+        headers: {
+          'User-Agent': CONFIG.USER_AGENT,
+          'Content-Type': 'application/json',
+          'Origin': 'https://nanana.app',
+          'Referer': 'https://nanana.app/en'
+        },
+        body: JSON.stringify({ email, otp })
+      });
+      
+      if (!loginResult.success) {
+        throw new Error('Login failed');
+      }
+      
+      // Extract cookies from response headers (simulated)
+      // In Cloudflare Workers, we need to handle cookies differently
+      const cookie = `session=${loginResult.data?.session?.token || ''}`;
+      
+      return {
+        'User-Agent': CONFIG.USER_AGENT,
+        'Content-Type': 'application/json',
+        'Origin': 'https://nanana.app',
+        'Referer': 'https://nanana.app/en',
+        'Cookie': cookie,
+        'x-fp-id': utils.genXfpid()
+      };
+      
+    } catch (error) {
+      console.error('Auth Error:', error);
+      // Return fallback headers
+      return {
+        'User-Agent': CONFIG.USER_AGENT,
+        'Origin': 'https://nanana.app',
+        'Referer': 'https://nanana.app/en',
+        'x-fp-id': utils.genXfpid()
+      };
+    }
+  }
+};
+
+async function nananaTransform(imageUrl, prompt) {
   try {
-    // Step 1: Download image
-    console.log('Step 1: Downloading image...');
+    // Step 1: Authentication
+    console.log('Step 1: Authenticating...');
+    const auth = await nananaAuth.getHeaders();
+    
+    // Step 2: Download image
+    console.log('Step 2: Downloading image...');
     const imageBuffer = await utils.downloadImage(imageUrl);
     if (!imageBuffer) {
-      return { success: false, error: 'Failed to download image from URL' };
+      return { success: false, error: 'Failed to download image' };
     }
-    console.log(`Image downloaded: ${imageBuffer.length} bytes`);
-
-    // Step 2: Get S3 presigned URL
-    console.log('Step 2: Getting upload URL...');
-    const filename = utils.genMD5() + '.jpg';
     
-    const preResult = await utils.makeRequest(`${CONFIG.BASE_URL}/api/chats/pre_url`, {
-      method: 'POST',
-      headers: headers,
-      body: JSON.stringify({ 
-        image_name: filename, 
-        content_type: 'image/jpeg' 
-      })
-    });
-
-    if (!preResult.success) {
-      console.log('Pre URL failed:', preResult);
-      return { 
-        success: false, 
-        error: 'Failed to get upload URL from PixWithAI',
-        details: preResult.raw || preResult.error
-      };
-    }
-
-    if (!preResult.data?.data?.url) {
-      console.log('Invalid pre URL response:', preResult.data);
-      return { 
-        success: false, 
-        error: 'Invalid response from PixWithAI',
-        details: JSON.stringify(preResult.data).substring(0, 200)
-      };
-    }
-
-    const uploadData = preResult.data.data.url;
-    console.log('Upload data received:', Object.keys(uploadData));
-    
-    if (!uploadData.fields || !uploadData.url) {
-      return { 
-        success: false, 
-        error: 'Missing upload fields or URL',
-        details: JSON.stringify(uploadData).substring(0, 200)
-      };
-    }
-
-    // Step 3: Upload to S3 via multipart form
-    console.log('Step 3: Uploading to S3...');
+    // Step 3: Upload image to Nanana
+    console.log('Step 3: Uploading image...');
     const formData = new FormData();
-    Object.entries(uploadData.fields).forEach(([key, value]) => {
-      formData.append(key, value);
-    });
-    
     const blob = new Blob([imageBuffer], { type: 'image/jpeg' });
-    formData.append('file', blob, filename);
-
-    const s3Response = await fetch(uploadData.url, {
+    formData.append('image', blob, 'input.jpg');
+    
+    const uploadResult = await utils.makeRequest(`${CONFIG.BASE_URL}/api/upload-img`, {
       method: 'POST',
+      headers: {
+        'User-Agent': CONFIG.USER_AGENT,
+        'Origin': 'https://nanana.app',
+        'Referer': 'https://nanana.app/en',
+        'Cookie': auth.Cookie || '',
+        'x-fp-id': auth['x-fp-id']
+      },
       body: formData
     });
-
-    if (s3Response.status !== 204) {
-      const s3Text = await s3Response.text();
-      console.log('S3 Upload failed:', s3Text);
+    
+    if (!uploadResult.success || !uploadResult.data?.url) {
+      console.log('Upload failed:', uploadResult);
       return { 
         success: false, 
-        error: `S3 upload failed: ${s3Response.status}`,
-        details: s3Text.substring(0, 200)
+        error: 'Failed to upload image',
+        details: uploadResult.raw 
       };
     }
-
-    const imageKey = uploadData.fields.key;
-    console.log('Upload successful, key:', imageKey);
-
-    // Step 4: Get last UID before create
-    console.log('Step 4: Getting last UID...');
-    const beforeResult = await utils.makeRequest(`${CONFIG.BASE_URL}/api/items/history`, {
+    
+    const uploadedUrl = uploadResult.data.url;
+    console.log('Upload successful:', uploadedUrl);
+    
+    // Step 4: Create job
+    console.log('Step 4: Creating transformation job...');
+    const jobResult = await utils.makeRequest(`${CONFIG.BASE_URL}/api/image-to-image`, {
       method: 'POST',
-      headers: headers,
+      headers: {
+        'User-Agent': CONFIG.USER_AGENT,
+        'Content-Type': 'application/json',
+        'Origin': 'https://nanana.app',
+        'Referer': 'https://nanana.app/en',
+        'Cookie': auth.Cookie || '',
+        'x-fp-id': auth['x-fp-id']
+      },
       body: JSON.stringify({ 
-        tool_type: '1', 
-        tag: '', 
-        page: 0, 
-        page_size: 1 
+        prompt: prompt, 
+        image_urls: [uploadedUrl] 
       })
     });
-
-    let lastUid = null;
-    if (beforeResult.success && beforeResult.data?.data?.items?.length > 0) {
-      lastUid = beforeResult.data.data.items[0].uid;
-      console.log('Last UID:', lastUid);
-    }
-
-    // Step 5: Create task
-    console.log('Step 5: Creating transformation task...');
-    const createPayload = {
-      images: { image1: imageKey },
-      prompt: prompt,
-      options: { 
-        prompt_optimization: true, 
-        num_outputs: 1, 
-        aspect_ratio: '0' 
-      },
-      model_id: '1-0'
-    };
-
-    const createResult = await utils.makeRequest(`${CONFIG.BASE_URL}/api/items/create`, {
-      method: 'POST',
-      headers: headers,
-      body: JSON.stringify(createPayload)
-    });
-
-    if (!createResult.success) {
-      console.log('Create task failed:', createResult);
+    
+    if (!jobResult.success || !jobResult.data?.request_id) {
+      console.log('Job creation failed:', jobResult);
       return { 
         success: false, 
-        error: 'Failed to create transformation task',
-        details: createResult.raw || createResult.error
+        error: 'Failed to create job',
+        details: jobResult.raw 
       };
     }
-
-    if (createResult.data?.code !== 1) {
-      return { 
-        success: false, 
-        error: createResult.data?.message || 'Create task failed',
-        details: createResult.data
-      };
-    }
-
-    // Step 6: Poll for result
-    console.log('Step 6: Waiting for result...');
+    
+    const requestId = jobResult.data.request_id;
+    console.log('Job created, ID:', requestId);
+    
+    // Step 5: Poll for result
+    console.log('Step 5: Waiting for result...');
     let result = null;
-    const maxAttempts = 30;
+    const maxAttempts = 15;
     
     for (let i = 0; i < maxAttempts; i++) {
-      await new Promise(r => setTimeout(r, 5000));
+      await utils.delay(5000);
       
-      const historyResult = await utils.makeRequest(`${CONFIG.BASE_URL}/api/items/history`, {
+      const checkResult = await utils.makeRequest(`${CONFIG.BASE_URL}/api/get-result`, {
         method: 'POST',
-        headers: headers,
+        headers: {
+          'User-Agent': CONFIG.USER_AGENT,
+          'Content-Type': 'application/json',
+          'Origin': 'https://nanana.app',
+          'Referer': 'https://nanana.app/en',
+          'Cookie': auth.Cookie || '',
+          'x-fp-id': auth['x-fp-id']
+        },
         body: JSON.stringify({ 
-          tool_type: '1', 
-          tag: '', 
-          page: 0, 
-          page_size: 1 
+          requestId: requestId, 
+          type: 'image-to-image' 
         })
       });
-
-      if (historyResult.success && historyResult.data?.data?.items?.length > 0) {
-        const item = historyResult.data.data.items[0];
-        
-        console.log(`Attempt ${i + 1}/${maxAttempts}: UID=${item.uid}, Status=${item.status}`);
-        
-        // Check if this is a new item (not the one we had before)
-        if (item.uid !== lastUid && item.status === 2) {
-          const output = item.result_urls?.find(u => !u.is_input);
-          if (output) {
-            result = { item, url: output.hd || output.url };
-            console.log(`Result found on attempt ${i + 1}`);
-            break;
-          }
-        }
-        
-        // Status 3 = Failed
-        if (item.status === 3) {
-          return { 
-            success: false, 
-            error: 'Transformation failed by server',
-            details: item
-          };
+      
+      console.log(`Attempt ${i + 1}/${maxAttempts}:`, checkResult.data?.completed ? 'Completed' : 'Processing');
+      
+      if (checkResult.success && checkResult.data?.completed) {
+        const images = checkResult.data?.data?.images;
+        if (images && images.length > 0) {
+          result = images[0].url;
+          break;
         }
       }
     }
-
+    
     if (!result) {
-      return { success: false, error: `Timeout after ${maxAttempts} attempts` };
+      return { success: false, error: 'Processing timeout after 75 seconds' };
     }
-
-    // Step 7: Download result and upload to cloud
-    console.log('Step 7: Processing final image...');
-    const resultBuffer = await utils.downloadImage(result.url);
+    
+    // Step 6: Download result and upload to cloud
+    console.log('Step 6: Processing final image...');
+    const resultBuffer = await utils.downloadImage(result);
     if (!resultBuffer) {
       return { success: false, error: 'Failed to download result image' };
     }
-
+    
     const cloudUrl = await utils.uploadToCloud(resultBuffer);
     if (!cloudUrl) {
       return { success: false, error: 'Failed to upload to cloud storage' };
     }
-
+    
     return {
       success: true,
       image_url: cloudUrl,
-      original_url: result.url,
-      prompt: result.item.prompt,
-      model: result.item.model_name || 'Flux'
+      original_url: result,
+      job_id: requestId
     };
-
+    
   } catch (error) {
-    console.error(`Img2Img Error: ${error.message}`);
+    console.error(`Nanana Error: ${error.message}`);
     return { success: false, error: error.message };
   }
 }
