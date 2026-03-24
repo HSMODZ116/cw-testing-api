@@ -50,25 +50,6 @@ export default {
       }, 400);
     }
 
-    // Validate prompt length
-    if (prompt.length < 3) {
-      return jsonResponse({
-        success: false,
-        error: 'Prompt must be at least 3 characters long.',
-        developer: 'Haseeb Sahil',
-        channel: '@hsmodzofc2'
-      }, 400);
-    }
-
-    if (prompt.length > 500) {
-      return jsonResponse({
-        success: false,
-        error: 'Prompt is too long. Maximum 500 characters allowed.',
-        developer: 'Haseeb Sahil',
-        channel: '@hsmodzofc2'
-      }, 400);
-    }
-
     try {
       const result = await img2imgTransform(image, prompt);
 
@@ -76,6 +57,7 @@ export default {
         return jsonResponse({
           success: false,
           error: result.error,
+          details: result.details,
           developer: 'Haseeb Sahil',
           channel: '@hsmodzofc2'
         }, 500);
@@ -181,22 +163,27 @@ const utils = {
     }
   },
 
-  async makeRequest(url, options, isJson = true) {
+  async makeRequest(url, options) {
     try {
       const response = await fetch(url, options);
       const text = await response.text();
       
-      if (!isJson) {
-        return { success: response.ok, data: text, status: response.status };
-      }
+      console.log(`Request to ${url}: Status ${response.status}`);
+      console.log(`Response preview: ${text.substring(0, 200)}`);
       
       try {
         const data = JSON.parse(text);
         return { success: response.ok, data: data, status: response.status };
       } catch (e) {
-        return { success: false, error: 'Invalid JSON response', raw: text.substring(0, 200) };
+        return { 
+          success: false, 
+          error: 'Invalid JSON response', 
+          raw: text.substring(0, 500),
+          status: response.status 
+        };
       }
     } catch (error) {
+      console.error(`Request Error: ${error.message}`);
       return { success: false, error: error.message };
     }
   }
@@ -219,6 +206,7 @@ async function img2imgTransform(imageUrl, prompt) {
     if (!imageBuffer) {
       return { success: false, error: 'Failed to download image from URL' };
     }
+    console.log(`Image downloaded: ${imageBuffer.length} bytes`);
 
     // Step 2: Get S3 presigned URL
     console.log('Step 2: Getting upload URL...');
@@ -233,18 +221,33 @@ async function img2imgTransform(imageUrl, prompt) {
       })
     });
 
-    if (!preResult.success || !preResult.data?.data?.url) {
+    if (!preResult.success) {
       console.log('Pre URL failed:', preResult);
       return { 
         success: false, 
-        error: 'Failed to get upload URL',
-        details: preResult.error
+        error: 'Failed to get upload URL from PixWithAI',
+        details: preResult.raw || preResult.error
+      };
+    }
+
+    if (!preResult.data?.data?.url) {
+      console.log('Invalid pre URL response:', preResult.data);
+      return { 
+        success: false, 
+        error: 'Invalid response from PixWithAI',
+        details: JSON.stringify(preResult.data).substring(0, 200)
       };
     }
 
     const uploadData = preResult.data.data.url;
-    if (!uploadData.fields) {
-      return { success: false, error: 'Invalid upload data received' };
+    console.log('Upload data received:', Object.keys(uploadData));
+    
+    if (!uploadData.fields || !uploadData.url) {
+      return { 
+        success: false, 
+        error: 'Missing upload fields or URL',
+        details: JSON.stringify(uploadData).substring(0, 200)
+      };
     }
 
     // Step 3: Upload to S3 via multipart form
@@ -265,7 +268,11 @@ async function img2imgTransform(imageUrl, prompt) {
     if (s3Response.status !== 204) {
       const s3Text = await s3Response.text();
       console.log('S3 Upload failed:', s3Text);
-      return { success: false, error: `S3 upload failed: ${s3Response.status}` };
+      return { 
+        success: false, 
+        error: `S3 upload failed: ${s3Response.status}`,
+        details: s3Text.substring(0, 200)
+      };
     }
 
     const imageKey = uploadData.fields.key;
@@ -287,6 +294,7 @@ async function img2imgTransform(imageUrl, prompt) {
     let lastUid = null;
     if (beforeResult.success && beforeResult.data?.data?.items?.length > 0) {
       lastUid = beforeResult.data.data.items[0].uid;
+      console.log('Last UID:', lastUid);
     }
 
     // Step 5: Create task
@@ -310,13 +318,25 @@ async function img2imgTransform(imageUrl, prompt) {
 
     if (!createResult.success) {
       console.log('Create task failed:', createResult);
-      return { success: false, error: 'Failed to create transformation task' };
+      return { 
+        success: false, 
+        error: 'Failed to create transformation task',
+        details: createResult.raw || createResult.error
+      };
+    }
+
+    if (createResult.data?.code !== 1) {
+      return { 
+        success: false, 
+        error: createResult.data?.message || 'Create task failed',
+        details: createResult.data
+      };
     }
 
     // Step 6: Poll for result
     console.log('Step 6: Waiting for result...');
     let result = null;
-    const maxAttempts = 25;
+    const maxAttempts = 30;
     
     for (let i = 0; i < maxAttempts; i++) {
       await new Promise(r => setTimeout(r, 5000));
@@ -335,21 +355,25 @@ async function img2imgTransform(imageUrl, prompt) {
       if (historyResult.success && historyResult.data?.data?.items?.length > 0) {
         const item = historyResult.data.data.items[0];
         
+        console.log(`Attempt ${i + 1}/${maxAttempts}: UID=${item.uid}, Status=${item.status}`);
+        
         // Check if this is a new item (not the one we had before)
         if (item.uid !== lastUid && item.status === 2) {
           const output = item.result_urls?.find(u => !u.is_input);
           if (output) {
-            result = { item, url: output.hd };
+            result = { item, url: output.hd || output.url };
             console.log(`Result found on attempt ${i + 1}`);
             break;
           }
         }
         
-        console.log(`Attempt ${i + 1}/${maxAttempts}: Status = ${item.status}`);
-        
         // Status 3 = Failed
         if (item.status === 3) {
-          return { success: false, error: 'Transformation failed by server' };
+          return { 
+            success: false, 
+            error: 'Transformation failed by server',
+            details: item
+          };
         }
       }
     }
