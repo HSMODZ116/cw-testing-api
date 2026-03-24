@@ -1,4 +1,4 @@
-// Cloudflare Worker for Nanana AI - Image to Image Transformation
+// Cloudflare Worker for NananaV2 AI - Image to Image Transformation
 // Developer: Haseeb Sahil
 // Channel: @hsmodzofc2
 
@@ -26,15 +26,15 @@ export default {
     }
 
     const url = new URL(request.url);
-    const image = url.searchParams.get('image');
-    const prompt = url.searchParams.get('prompt');
+    const imageUrl = url.searchParams.get('url');
+    const prompt = url.searchParams.get('q');
 
     // Validation
-    if (!image) {
+    if (!imageUrl) {
       return jsonResponse({
         success: false,
-        error: 'Image parameter is required. Please provide an image URL.',
-        example: 'https://your-worker.workers.dev/?image=https://example.com/image.jpg&prompt=make it anime style',
+        error: 'Image URL parameter "url" is required.',
+        example: 'https://your-worker.workers.dev/?url=https://example.com/image.jpg&q=make it anime style',
         developer: 'Haseeb Sahil',
         channel: '@hsmodzofc2'
       }, 400);
@@ -43,7 +43,7 @@ export default {
     if (!prompt) {
       return jsonResponse({
         success: false,
-        error: 'Prompt parameter is required. Describe what you want.',
+        error: 'Prompt parameter "q" is required.',
         example: 'anime style, cartoon, realistic, etc.',
         developer: 'Haseeb Sahil',
         channel: '@hsmodzofc2'
@@ -51,7 +51,7 @@ export default {
     }
 
     // Validate image URL
-    if (!image.startsWith('http')) {
+    if (!imageUrl.startsWith('http')) {
       return jsonResponse({
         success: false,
         error: 'Only HTTP/HTTPS image URLs are supported.',
@@ -80,7 +80,7 @@ export default {
     }
 
     try {
-      const result = await nananaTransform(image, prompt);
+      const result = await nananaTransform(imageUrl, prompt);
 
       if (!result.success) {
         return jsonResponse({
@@ -96,10 +96,9 @@ export default {
         success: true,
         message: "Image transformed successfully!",
         data: {
-          original_image: image,
-          transformed_image: result.image_url,
-          prompt: prompt,
-          job_id: result.job_id,
+          prompt: result.prompt,
+          original: result.original,
+          output: result.output,
           timestamp: new Date().toISOString()
         },
         developer: 'Haseeb Sahil',
@@ -121,18 +120,11 @@ export default {
 
 const CONFIG = {
   BASE_URL: 'https://nanana.app',
-  AKUNLAMA_URL: 'https://akunlama.com',
-  USER_AGENT: 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36'
+  USER_AGENT: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 };
 
 const utils = {
   delay: (ms) => new Promise(resolve => setTimeout(resolve, ms)),
-
-  genXfpid: () => {
-    const p1 = crypto.randomUUID().replace(/-/g, '').slice(0, 32);
-    const p2 = crypto.randomUUID().replace(/-/g, '');
-    return btoa(`${p1}.${p2}`);
-  },
 
   async downloadImage(url) {
     try {
@@ -213,233 +205,130 @@ const utils = {
   }
 };
 
-// Nanana Auth Functions
-const nananaAuth = {
-  getOTP: async (username) => {
-    const url = `${CONFIG.AKUNLAMA_URL}/api/v1/mail/list?recipient=${username}`;
-    
-    for (let i = 0; i < 20; i++) {
-      const result = await utils.makeRequest(url, {
-        method: 'GET',
-        headers: { 'User-Agent': CONFIG.USER_AGENT }
-      });
-      
-      if (result.success && result.data && result.data.length > 0) {
-        const { region, key } = result.data[0].storage;
-        const htmlResult = await utils.makeRequest(
-          `${CONFIG.AKUNLAMA_URL}/api/v1/mail/getHtml?region=${region}&key=${key}`,
-          { method: 'GET', headers: { 'User-Agent': CONFIG.USER_AGENT } }
-        );
-        
-        if (htmlResult.success && htmlResult.data) {
-          const html = htmlResult.data;
-          const otpMatch = html.match(/\b\d{6}\b/);
-          if (otpMatch) return otpMatch[0];
-        }
-      }
-      
-      await utils.delay(3000);
-    }
-    throw new Error('OTP Timeout!');
-  },
-
-  getHeaders: async () => {
-    try {
-      const username = crypto.randomUUID().replace(/-/g, '').slice(0, 12);
-      const email = `${username}@akunlama.com`;
-      
-      // Send OTP
-      const sendResult = await utils.makeRequest(`${CONFIG.BASE_URL}/api/auth/email-otp/send-verification-otp`, {
-        method: 'POST',
-        headers: {
-          'User-Agent': CONFIG.USER_AGENT,
-          'Content-Type': 'application/json',
-          'Origin': 'https://nanana.app',
-          'Referer': 'https://nanana.app/en'
-        },
-        body: JSON.stringify({ email, type: 'sign-in' })
-      });
-      
-      if (!sendResult.success) {
-        throw new Error('Failed to send OTP');
-      }
-      
-      // Get OTP from email
-      const otp = await nananaAuth.getOTP(username);
-      
-      // Login with OTP
-      const loginResult = await utils.makeRequest(`${CONFIG.BASE_URL}/api/auth/sign-in/email-otp`, {
-        method: 'POST',
-        headers: {
-          'User-Agent': CONFIG.USER_AGENT,
-          'Content-Type': 'application/json',
-          'Origin': 'https://nanana.app',
-          'Referer': 'https://nanana.app/en'
-        },
-        body: JSON.stringify({ email, otp })
-      });
-      
-      if (!loginResult.success) {
-        throw new Error('Login failed');
-      }
-      
-      // Extract cookies from response headers (simulated)
-      // In Cloudflare Workers, we need to handle cookies differently
-      const cookie = `session=${loginResult.data?.session?.token || ''}`;
-      
-      return {
-        'User-Agent': CONFIG.USER_AGENT,
-        'Content-Type': 'application/json',
-        'Origin': 'https://nanana.app',
-        'Referer': 'https://nanana.app/en',
-        'Cookie': cookie,
-        'x-fp-id': utils.genXfpid()
-      };
-      
-    } catch (error) {
-      console.error('Auth Error:', error);
-      // Return fallback headers
-      return {
-        'User-Agent': CONFIG.USER_AGENT,
-        'Origin': 'https://nanana.app',
-        'Referer': 'https://nanana.app/en',
-        'x-fp-id': utils.genXfpid()
-      };
-    }
-  }
-};
-
 async function nananaTransform(imageUrl, prompt) {
   try {
-    // Step 1: Authentication
-    console.log('Step 1: Authenticating...');
-    const auth = await nananaAuth.getHeaders();
+    const headers = {
+      'User-Agent': CONFIG.USER_AGENT,
+      'Content-Type': 'application/json',
+      'Origin': 'https://nanana.app',
+      'Referer': 'https://nanana.app/',
+      'Accept': 'application/json, text/plain, */*'
+    };
+
+    // Step 1: Create transformation job
+    console.log('Step 1: Creating transformation job...');
+    console.log(`Prompt: ${prompt}`);
+    console.log(`Image URL: ${imageUrl}`);
     
-    // Step 2: Download image
-    console.log('Step 2: Downloading image...');
-    const imageBuffer = await utils.downloadImage(imageUrl);
-    if (!imageBuffer) {
-      return { success: false, error: 'Failed to download image' };
-    }
-    
-    // Step 3: Upload image to Nanana
-    console.log('Step 3: Uploading image...');
-    const formData = new FormData();
-    const blob = new Blob([imageBuffer], { type: 'image/jpeg' });
-    formData.append('image', blob, 'input.jpg');
-    
-    const uploadResult = await utils.makeRequest(`${CONFIG.BASE_URL}/api/upload-img`, {
+    const createPayload = {
+      prompt: prompt,
+      image_urls: [imageUrl]
+    };
+
+    const createResult = await utils.makeRequest(`${CONFIG.BASE_URL}/api/image-to-image`, {
       method: 'POST',
-      headers: {
-        'User-Agent': CONFIG.USER_AGENT,
-        'Origin': 'https://nanana.app',
-        'Referer': 'https://nanana.app/en',
-        'Cookie': auth.Cookie || '',
-        'x-fp-id': auth['x-fp-id']
-      },
-      body: formData
+      headers: headers,
+      body: JSON.stringify(createPayload)
     });
-    
-    if (!uploadResult.success || !uploadResult.data?.url) {
-      console.log('Upload failed:', uploadResult);
+
+    if (!createResult.success) {
+      console.log('Create job failed:', createResult);
       return { 
         success: false, 
-        error: 'Failed to upload image',
-        details: uploadResult.raw 
+        error: 'Failed to create transformation job',
+        details: createResult.raw || createResult.error
       };
     }
-    
-    const uploadedUrl = uploadResult.data.url;
-    console.log('Upload successful:', uploadedUrl);
-    
-    // Step 4: Create job
-    console.log('Step 4: Creating transformation job...');
-    const jobResult = await utils.makeRequest(`${CONFIG.BASE_URL}/api/image-to-image`, {
-      method: 'POST',
-      headers: {
-        'User-Agent': CONFIG.USER_AGENT,
-        'Content-Type': 'application/json',
-        'Origin': 'https://nanana.app',
-        'Referer': 'https://nanana.app/en',
-        'Cookie': auth.Cookie || '',
-        'x-fp-id': auth['x-fp-id']
-      },
-      body: JSON.stringify({ 
-        prompt: prompt, 
-        image_urls: [uploadedUrl] 
-      })
-    });
-    
-    if (!jobResult.success || !jobResult.data?.request_id) {
-      console.log('Job creation failed:', jobResult);
+
+    const requestId = createResult.data?.request_id;
+    if (!requestId) {
       return { 
         success: false, 
-        error: 'Failed to create job',
-        details: jobResult.raw 
+        error: 'No request ID received',
+        details: createResult.data
       };
     }
-    
-    const requestId = jobResult.data.request_id;
-    console.log('Job created, ID:', requestId);
-    
-    // Step 5: Poll for result
-    console.log('Step 5: Waiting for result...');
+
+    console.log('Job created, Request ID:', requestId);
+
+    // Step 2: Poll for result
+    console.log('Step 2: Waiting for result...');
     let result = null;
-    const maxAttempts = 15;
+    const maxAttempts = 25;
     
     for (let i = 0; i < maxAttempts; i++) {
-      await utils.delay(5000);
+      await utils.delay(4000);
       
+      const checkPayload = {
+        requestId: requestId,
+        type: 'image-to-image'
+      };
+
       const checkResult = await utils.makeRequest(`${CONFIG.BASE_URL}/api/get-result`, {
         method: 'POST',
-        headers: {
-          'User-Agent': CONFIG.USER_AGENT,
-          'Content-Type': 'application/json',
-          'Origin': 'https://nanana.app',
-          'Referer': 'https://nanana.app/en',
-          'Cookie': auth.Cookie || '',
-          'x-fp-id': auth['x-fp-id']
-        },
-        body: JSON.stringify({ 
-          requestId: requestId, 
-          type: 'image-to-image' 
-        })
+        headers: headers,
+        body: JSON.stringify(checkPayload)
       });
-      
+
       console.log(`Attempt ${i + 1}/${maxAttempts}:`, checkResult.data?.completed ? 'Completed' : 'Processing');
       
       if (checkResult.success && checkResult.data?.completed) {
-        const images = checkResult.data?.data?.images;
-        if (images && images.length > 0) {
-          result = images[0].url;
-          break;
-        }
+        result = checkResult.data;
+        console.log('Transformation completed!');
+        break;
       }
     }
-    
+
     if (!result) {
-      return { success: false, error: 'Processing timeout after 75 seconds' };
+      return { 
+        success: false, 
+        error: `Processing timeout after ${maxAttempts * 4} seconds` 
+      };
     }
-    
-    // Step 6: Download result and upload to cloud
-    console.log('Step 6: Processing final image...');
-    const resultBuffer = await utils.downloadImage(result);
+
+    // Get output URL
+    const outputUrl = result.image_url || result.url || result.data?.images?.[0]?.url;
+    if (!outputUrl) {
+      return { 
+        success: false, 
+        error: 'No output image URL received',
+        details: result
+      };
+    }
+
+    console.log('Output URL:', outputUrl);
+
+    // Step 3: Download result and upload to cloud
+    console.log('Step 3: Processing final image...');
+    const resultBuffer = await utils.downloadImage(outputUrl);
     if (!resultBuffer) {
-      return { success: false, error: 'Failed to download result image' };
+      // If can't download, return the original URL
+      return {
+        success: true,
+        prompt: prompt,
+        original: imageUrl,
+        output: outputUrl
+      };
     }
-    
+
     const cloudUrl = await utils.uploadToCloud(resultBuffer);
     if (!cloudUrl) {
-      return { success: false, error: 'Failed to upload to cloud storage' };
+      // If upload fails, return original URL
+      return {
+        success: true,
+        prompt: prompt,
+        original: imageUrl,
+        output: outputUrl
+      };
     }
-    
+
     return {
       success: true,
-      image_url: cloudUrl,
-      original_url: result,
-      job_id: requestId
+      prompt: prompt,
+      original: imageUrl,
+      output: cloudUrl
     };
-    
+
   } catch (error) {
     console.error(`Nanana Error: ${error.message}`);
     return { success: false, error: error.message };
