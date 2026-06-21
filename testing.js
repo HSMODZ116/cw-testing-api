@@ -56,6 +56,7 @@ async function fetchTargetSite(value) {
   return parseZongHtml(html);
 }
 
+/* ---------------------- Zong Parser (Final Reliable Method) ---------------------- */
 function parseZongHtml(html) {
   const rows = [];
   
@@ -64,21 +65,36 @@ function parseZongHtml(html) {
   let cnic = null;
   let address = null;
 
+  // 1. Mobile
   const mobileMatch = html.match(/MOBILE#:\s*([0-9]+)/i);
   if (mobileMatch && mobileMatch[1]) {
       mobile = mobileMatch[1];
   }
 
-  const nameMatch = html.match(/Date of issue\.\s*([0-9]{2}\s[A-Za-z]+\s[0-9]{4})\s*<br>\s*([A-Za-z\s.]+)/i);
-  if (nameMatch && nameMatch[2]) {
-      name = nameMatch[2].trim();
+  // 2. Name
+  // Ye exact HTML structure match karega: Date ke baad br aur phir Name
+  const nameMatch = html.match(/Date of issue\.\s*[0-9]{2}\s[A-Za-z]+\s[0-9]{4}\s*<br>\s*([A-Za-z\s.]+)/i);
+  if (nameMatch && nameMatch[1]) {
+      name = nameMatch[1].trim();
   }
 
+  // 3. CNIC (100% Fix)
+  // HTML mein Left Column <td> me "holder of CNIC no." aur Right Column <td> me CNIC hai.
+  // Hum pure HTML mein se "holder of CNIC no." dhoondhenge, aur uske baad jo next Numeric <td> aayega wo utha lenge.
   const cnicMatch = html.match(/holder of CNIC no\.[^>]*>\s*<\/td>\s*<td[^>]*>\s*([0-9]+)/i);
   if (cnicMatch && cnicMatch[1]) {
       cnic = cnicMatch[1];
   }
+  
+  // Backup Method: Agar upar wala fail ho, toh HTML mein saare numbers dhoondho aur jo 13 digits ka ho wo CNIC hai
+  if (!cnic) {
+      const allNumbers = html.match(/\b\d{13}\b/g);
+      if (allNumbers && allNumbers.length > 0) {
+          cnic = allNumbers[0]; // Pehla 13-digit number CNIC hoga
+      }
+  }
 
+  // 4. Address (Kuch Zong responses mein address hota hai)
   const addressMatch = html.match(/collected\/deducted from\s*([^<]+)/i);
   if (addressMatch && addressMatch[1]) {
       address = addressMatch[1].trim();
