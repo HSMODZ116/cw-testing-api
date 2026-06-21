@@ -53,7 +53,6 @@ async function fetchTargetSite(value) {
 
   const html = await response.text();
 
-  // ✅ CORRECTED UNIVERSAL DETECTION (Priority based)
   if (html.includes('NUMBER:')) {
     return parseUfoneHtml(html);
   } else if (html.includes('MOBILE#')) {
@@ -67,9 +66,6 @@ async function fetchTargetSite(value) {
   }
 }
 
-/* ---------------------- PARSERS ---------------------- */
-
-// 1. Ufone (Priority 1)
 function parseUfoneHtml(html) {
   const rows = [];
   
@@ -110,7 +106,6 @@ function parseUfoneHtml(html) {
   return rows;
 }
 
-// 2. Zong (Priority 2)
 function parseZongHtml(html) {
   const rows = [];
   
@@ -158,7 +153,6 @@ function parseZongHtml(html) {
   return rows;
 }
 
-// 3. Telenor (Priority 3)
 function parseTelenorHtml(html) {
   const rows = [];
   
@@ -207,7 +201,6 @@ function parseTelenorHtml(html) {
   return rows;
 }
 
-// 4. Jazz / Generic Table (Priority 4 - Last resort)
 function parseTableHtml(html) {
   const rows = [];
   const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
