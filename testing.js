@@ -58,15 +58,16 @@ async function fetchTargetSite(value) {
 
   const html = await response.text();
 
-  // HTML Table parse karein (aapka purana parser theek hai)
+  // HTML Table parse karein
   return parseTableHtml(html);
 }
 
-/* ---------------------- HTML Parser ---------------------- */
+/* ---------------------- HTML Parser (Header Row Skipped) ---------------------- */
 function parseTableHtml(html) {
   const rows = [];
   const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
   let match;
+  let rowIndex = 0; // Row counter add kiya
 
   while ((match = rowRegex.exec(html))) {
     const rowHtml = match[1];
@@ -74,7 +75,13 @@ function parseTableHtml(html) {
       (m) => m[1].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim()
     );
 
-    if (cols.length >= 5) { // 5 columns: Mobile, Name, CNIC, Address, Status
+    // ✅ FIX: Pehli row (index 0) ko skip karo (Headers)
+    if (rowIndex === 0) {
+      rowIndex++;
+      continue;
+    }
+
+    if (cols.length >= 5) { 
       rows.push({
         Mobile: cols[0] || null,
         Name: cols[1] || null,
@@ -85,6 +92,7 @@ function parseTableHtml(html) {
         Country: "Pakistan"
       });
     }
+    rowIndex++;
   }
   return rows;
 }
