@@ -37,7 +37,6 @@ function jsonResponse(data, status = 200) {
 async function fetchTargetSite(value) {
   const TARGET_URL = "https://simownerdetailspk.com/numberDetails.php";
 
-  // 🔥 YAHAN DECODED PAYLOAD HAI (Encryption ki zaroorat nahi!)
   const payload = new URLSearchParams({
     numberCnic: value,
     searchNumber: "search"
@@ -58,16 +57,15 @@ async function fetchTargetSite(value) {
 
   const html = await response.text();
 
-  // HTML Table parse karein
   return parseTableHtml(html);
 }
 
-/* ---------------------- HTML Parser (Header Row Skipped) ---------------------- */
+/* ---------------------- HTML Parser (Strict 4 Fields) ---------------------- */
 function parseTableHtml(html) {
   const rows = [];
   const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
   let match;
-  let rowIndex = 0; // Row counter add kiya
+  let rowIndex = 0;
 
   while ((match = rowRegex.exec(html))) {
     const rowHtml = match[1];
@@ -75,21 +73,20 @@ function parseTableHtml(html) {
       (m) => m[1].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim()
     );
 
-    // ✅ FIX: Pehli row (index 0) ko skip karo (Headers)
+    // Pehli row (Headers) ko skip karo
     if (rowIndex === 0) {
       rowIndex++;
       continue;
     }
 
-    if (cols.length >= 5) { 
+    // Sirf 4 fields return karo, baaki sab hata diya
+    if (cols.length >= 4) { 
       rows.push({
         Mobile: cols[0] || null,
         Name: cols[1] || null,
         CNIC: cols[2] || null,
-        Address: cols[3] || null,
-        Status: cols[4] || null,
-        Brand: cols[5] || null, // Optional
-        Country: "Pakistan"
+        Address: cols[3] || null
+        // Status, Brand, Country completely removed
       });
     }
     rowIndex++;
