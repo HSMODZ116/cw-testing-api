@@ -23,6 +23,8 @@ export default {
   }
 };
 
+/* ---------------------- Helper Functions ---------------------- */
+
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data, null, 2), {
     status,
@@ -53,10 +55,12 @@ async function fetchTargetSite(value) {
 
   const html = await response.text();
 
-  return parseTelenorHtml(html);
+  // Sirf Ufone ka parser call karein
+  return parseUfoneHtml(html);
 }
 
-function parseTelenorHtml(html) {
+/* ---------------------- Ufone Parser (Clean & Direct Label Based) ---------------------- */
+function parseUfoneHtml(html) {
   const rows = [];
   
   let mobile = null;
@@ -64,34 +68,33 @@ function parseTelenorHtml(html) {
   let cnic = null;
   let address = null;
 
-  const msisdnMatch = html.match(/MSISDN\s*<\/td>\s*<td[^>]*>\s*(\d+)/i);
-  if (msisdnMatch && msisdnMatch[1]) {
-      mobile = msisdnMatch[1];
+  // 1. Extract Mobile (NUMBER: ke baad)
+  // Regex: "NUMBER:" ke baad, space ya br ke baad wale digits
+  const mobileMatch = html.match(/NUMBER:\s*(\d+)/i);
+  if (mobileMatch && mobileMatch[1]) {
+      mobile = mobileMatch[1];
   }
 
-  const allBorderedTexts = html.match(/border-bottom:2px solid black;">([^<]+)/g);
-  const cleanTexts = [];
-  
-  if (allBorderedTexts) {
-      for(let t of allBorderedTexts) {
-          let clean = t.replace(/.*>/, '').trim();
-          if (clean.length > 2 && clean !== '.' && !clean.includes('Serial') && !clean.includes('MSISDN') && !clean.includes('Certified')) {
-              cleanTexts.push(clean);
-          }
-      }
+  // 2. Extract Name (NAME: ke baad)
+  const nameMatch = html.match(/NAME:\s*([^<]+)/i);
+  if (nameMatch && nameMatch[1]) {
+      name = nameMatch[1].trim();
   }
 
-  if (cleanTexts.length >= 1) name = cleanTexts[0];
-  if (cleanTexts.length >= 2) address = cleanTexts[1];
-
-  const cnicTdMatch = html.match(/holder of CNIC No\.\s*<\/td>\s*<td[^>]*>([^<]*)/i);
-  if (cnicTdMatch && cnicTdMatch[1]) {
-      let numbersOnly = cnicTdMatch[1].replace(/[^0-9]/g, '');
-      if (numbersOnly.length === 13) {
-          cnic = numbersOnly;
-      }
+  // 3. Extract CNIC (CNIC: ke baad)
+  const cnicMatch = html.match(/CNIC:\s*(\d+)/i);
+  if (cnicMatch && cnicMatch[1]) {
+      cnic = cnicMatch[1];
   }
 
+  // 4. Extract Address (ADDRESS: ke baad)
+  // Address multiline ho sakta hai, isliye <br> tak ya end tak dhoondhein
+  const addressMatch = html.match(/ADDRESS:\s*([^<]+)/i);
+  if (addressMatch && addressMatch[1]) {
+      address = addressMatch[1].trim();
+  }
+
+  // Final Result Push
   if (mobile || name || cnic || address) {
     rows.push({
       Mobile: mobile || null,
