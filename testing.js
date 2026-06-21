@@ -55,11 +55,11 @@ async function fetchTargetSite(value) {
 
   const html = await response.text();
 
-  // ✅ Sirf Telenor ka parser call karein
+  // Sirf Telenor ka parser
   return parseTelenorHtml(html);
 }
 
-/* ---------------------- Telenor Parser (Clean & Garbage Free) ---------------------- */
+/* ---------------------- Telenor Parser (Complete & Accurate) ---------------------- */
 function parseTelenorHtml(html) {
   const rows = [];
   
@@ -74,38 +74,48 @@ function parseTelenorHtml(html) {
       mobile = msisdnMatch[1];
   }
 
-  // 2. Extract Name & Address (Border bottom walay texts)
+  // 2. Extract All Meaningful Texts (Underline ke neeche wale)
   const allBorderedTexts = html.match(/border-bottom:2px solid black;">([^<]+)/g);
   
   const cleanTexts = [];
   if (allBorderedTexts) {
       for(let t of allBorderedTexts) {
           let clean = t.replace(/.*>/, '').trim();
-          // Sirf meaningful text rakhein (dots aur labels ko hatao)
+          // Sirf meaningful text (Dots aur labels ko hatao)
           if (clean.length > 2 && clean !== '.' && !clean.includes('Serial') && !clean.includes('MSISDN') && !clean.includes('Certified')) {
               cleanTexts.push(clean);
           }
       }
   }
 
-  // Name (Pehla milne wala bada text)
+  // Name (Pehla clean text)
   if (cleanTexts.length >= 1) {
       name = cleanTexts[0];
   }
-  // Address (Doosra milne wala bada text)
+  // Address (Doosra clean text)
   if (cleanTexts.length >= 2) {
       address = cleanTexts[1];
   }
 
-  // 3. Extract CNIC (Agar available ho toh)
+  // 3. CNIC Extraction (FIXED LOGIC)
+  // Try 1: Direct label se match karein (Label wali row se)
   const cnicMatch = html.match(/CNIC No\.\s*<\/td>\s*<td[^>]*>\s*([\d]+)/i);
   if (cnicMatch && cnicMatch[1]) {
       cnic = cnicMatch[1];
-  }
-  if (!cnic) {
+  } else {
+      // Try 2: Alternate label "holder of CNIC No."
       const cnicMatch2 = html.match(/holder of CNIC No\.\s*<\/td>\s*<td[^>]*>\s*([\d]+)/i);
       if (cnicMatch2 && cnicMatch2[1]) {
           cnic = cnicMatch2[1];
+      } else {
+          // ✅ Try 3: Sab se accurate tareeqa - CleanTexts mein se 13 digits ka number dhoondho (CNIC format)
+          for (let text of cleanTexts) {
+              // Regex check: Agar text sirf numbers hai aur length 13 hai
+              if (/^\d{13}$/.test(text)) {
+                  cnic = text;
+                  break; // Mil gaya, loop rok do
+              }
+          }
       }
   }
 
