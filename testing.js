@@ -53,10 +53,11 @@ async function fetchTargetSite(value) {
 
   const html = await response.text();
 
-  return parseUfoneHtml(html);
+  return parseZongHtml(html);
 }
 
-function parseUfoneHtml(html) {
+/* ---------------------- Zong Parser (Table Columns & Labels) ---------------------- */
+function parseZongHtml(html) {
   const rows = [];
   
   let mobile = null;
@@ -64,26 +65,57 @@ function parseUfoneHtml(html) {
   let cnic = null;
   let address = null;
 
-  const mobileMatch = html.match(/NUMBER:\s*(\d+)/i);
+  // 1. Extract Mobile (MOBILE# ke baad wali line)
+  // Label: MOBILE#: 3150954290
+  const mobileMatch = html.match(/MOBILE#:\s*(\d+)/i);
   if (mobileMatch && mobileMatch[1]) {
       mobile = mobileMatch[1];
   }
 
-  const nameMatch = html.match(/NAME:\s*([^<]+)/i);
-  if (nameMatch && nameMatch[1]) {
-      name = nameMatch[1].trim();
+  // 2. Extract Name (Right column mein specific line pe)
+  // HTML mein "Naveeda Khanam" likha hai
+  // Uske aas paas structure dhoondh rahe hain
+  // "Date of issue" ke baad, ya specific line pe
+  let nameLine = html.match(/Original\/Duplicate Date of issue\.\s*([^<]+)/i);
+  if (nameLine && nameLine[1]) {
+      // Line ko split karein aur pehla valid word uthayein
+      let parts = nameLine[1].trim().split(/\s+/);
+      // Agar last part year (2024) hai toh usko hata kar name dhoondhein
+      // Zong ke layout mein name last line ke upar hota hai
+      let tempName = html.match(/>\s*([A-Za-z]+\s+[A-Za-z]+)\s*<\/td>/g);
+      if(tempName) {
+          // Clean karein
+          name = tempName[tempName.length-1].replace(/[<>]/g, '').trim();
+      }
   }
 
-  const cnicMatch = html.match(/CNIC:\s*(\d+)/i);
+  // Agar name nahi mila, alternate method dhoondhein
+  if(!name) {
+      const altNameMatch = html.match(/td[^>]*>\s*([A-Za-z]+\s+[A-Za-z]+)\s*<\/td>\s*<td/i);
+      if(altNameMatch && altNameMatch[1]) {
+          name = altNameMatch[1].trim();
+      }
+  }
+
+  // 3. Extract CNIC (Right column mein, label ke samne)
+  // Label: holder of CNIC no.
+  // Value same row ke right side mein: 1730129916146
+  const cnicMatch = html.match(/holder of CNIC no\.\s*<\/td>\s*<td[^>]*>\s*(\d+)/i);
   if (cnicMatch && cnicMatch[1]) {
       cnic = cnicMatch[1];
   }
 
-  const addressMatch = html.match(/ADDRESS:\s*([^<]+)/i);
+  // 4. Extract Address
+  // Zong layout mein Address clear nahi hai, "Collected/deducted from" ke baad wali line
+  const addressMatch = html.match(/collected\/deducted from\s*([^<]+)/i);
   if (addressMatch && addressMatch[1]) {
       address = addressMatch[1].trim();
   }
 
+  // Agar address nahi mila, toh default null rakhain
+  if(!address) address = null;
+
+  // Final Result Push
   if (mobile || name || cnic || address) {
     rows.push({
       Mobile: mobile || null,
