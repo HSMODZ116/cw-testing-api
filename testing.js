@@ -56,7 +56,6 @@ async function fetchTargetSite(value) {
   return parseZongHtml(html);
 }
 
-/* ---------------------- Zong Parser (100% Verified against HTML) ---------------------- */
 function parseZongHtml(html) {
   const rows = [];
   
@@ -65,45 +64,26 @@ function parseZongHtml(html) {
   let cnic = null;
   let address = null;
 
-  // 1. Mobile Number
-  // Label MOBILE# ke baad jo bhi number ho
   const mobileMatch = html.match(/MOBILE#:\s*([0-9]+)/i);
   if (mobileMatch && mobileMatch[1]) {
       mobile = mobileMatch[1];
   }
 
-  // 2. Name (Naveeda Khanam)
-  // Zong ke HTML mein Name "Original/Duplicate Date of issue..." ke just neeche hai. 
-  // Isko dhoondhne ke liye hum "Date of issue" ke baad ka text utha kar clean karenge.
   const nameMatch = html.match(/Date of issue\.\s*([0-9]{2}\s[A-Za-z]+\s[0-9]{4})\s*<br>\s*([A-Za-z\s.]+)/i);
   if (nameMatch && nameMatch[2]) {
       name = nameMatch[2].trim();
   }
-  
-  // Fallback: Agar upar wala fail ho, toh seedha "PART VII" ke baad wala text uthao
-  if (!name) {
-      const fallbackName = html.match(/PART VII[^<]*<br>\s*([A-Za-z\s.]+)/i);
-      if (fallbackName && fallbackName[1]) {
-          name = fallbackName[1].trim();
-      }
-  }
 
-  // 3. CNIC
-  // Left column mein "holder of CNIC no." likha hai, uski value Right column (second <td>) mein hai
-  // Hum label dhoondhenge aur uske baad wala number uthayenge.
-  const cnicMatch = html.match(/holder of CNIC no\.\s*<\/td>\s*<td[^>]*>\s*([0-9]+)/i);
+  const cnicMatch = html.match(/holder of CNIC no\.[^>]*>\s*<\/td>\s*<td[^>]*>\s*([0-9]+)/i);
   if (cnicMatch && cnicMatch[1]) {
       cnic = cnicMatch[1];
   }
 
-  // 4. Address
-  // Zong ke HTML mein Address clear nahi hai, lekin "collected/deducted from" ke baad wali line address hoti hai
   const addressMatch = html.match(/collected\/deducted from\s*([^<]+)/i);
   if (addressMatch && addressMatch[1]) {
       address = addressMatch[1].trim();
   }
 
-  // Final Push
   if (mobile || name || cnic) {
     rows.push({
       Mobile: mobile || null,
