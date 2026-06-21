@@ -53,9 +53,144 @@ async function fetchTargetSite(value) {
 
   const html = await response.text();
 
-  return parseZongHtml(html);
+  // SMART DETECTION LOGIC
+  if (html.includes('<table')) {
+    return parseTableHtml(html);
+  } else if (html.includes('MSISDN')) {
+    return parseTelenorHtml(html);
+  } else if (html.includes('NUMBER:')) {
+    return parseUfoneHtml(html);
+  } else if (html.includes('MOBILE#')) {
+    return parseZongHtml(html);
+  } else {
+    return [];
+  }
 }
 
+/* ---------------------- PARSERS ---------------------- */
+
+// 1. Jazz / Generic Table
+function parseTableHtml(html) {
+  const rows = [];
+  const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+  let match;
+  let rowIndex = 0;
+
+  while ((match = rowRegex.exec(html))) {
+    const rowHtml = match[1];
+    const cols = [...rowHtml.matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)].map(
+      (m) => m[1].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim()
+    );
+
+    if (rowIndex === 0) {
+      rowIndex++;
+      continue;
+    }
+
+    if (cols.length >= 4) { 
+      rows.push({
+        Mobile: cols[0] || null,
+        Name: cols[1] || null,
+        CNIC: cols[2] || null,
+        Address: cols[3] || null
+      });
+    }
+    rowIndex++;
+  }
+  return rows;
+}
+
+// 2. Telenor
+function parseTelenorHtml(html) {
+  const rows = [];
+  
+  let mobile = null;
+  let name = null;
+  let cnic = null;
+  let address = null;
+
+  const msisdnMatch = html.match(/MSISDN\s*<\/td>\s*<td[^>]*>\s*(\d+)/i);
+  if (msisdnMatch && msisdnMatch[1]) {
+      mobile = msisdnMatch[1];
+  }
+
+  const allBorderedTexts = html.match(/border-bottom:2px solid black;">([^<]+)/g);
+  const cleanTexts = [];
+  
+  if (allBorderedTexts) {
+      for(let t of allBorderedTexts) {
+          let clean = t.replace(/.*>/, '').trim();
+          if (clean.length > 2 && clean !== '.' && !clean.includes('Serial') && !clean.includes('MSISDN') && !clean.includes('Certified')) {
+              cleanTexts.push(clean);
+          }
+      }
+  }
+
+  if (cleanTexts.length >= 1) name = cleanTexts[0];
+  if (cleanTexts.length >= 2) address = cleanTexts[1];
+
+  const cnicTdMatch = html.match(/holder of CNIC No\.\s*<\/td>\s*<td[^>]*>([^<]*)/i);
+  if (cnicTdMatch && cnicTdMatch[1]) {
+      let numbersOnly = cnicTdMatch[1].replace(/[^0-9]/g, '');
+      if (numbersOnly.length === 13) {
+          cnic = numbersOnly;
+      }
+  }
+
+  if (mobile || name || cnic || address) {
+    rows.push({
+      Mobile: mobile || null,
+      Name: name || null,
+      CNIC: cnic || null,
+      Address: address || null
+    });
+  }
+
+  return rows;
+}
+
+// 3. Ufone
+function parseUfoneHtml(html) {
+  const rows = [];
+  
+  let mobile = null;
+  let name = null;
+  let cnic = null;
+  let address = null;
+
+  const mobileMatch = html.match(/NUMBER:\s*(\d+)/i);
+  if (mobileMatch && mobileMatch[1]) {
+      mobile = mobileMatch[1];
+  }
+
+  const nameMatch = html.match(/NAME:\s*([^<]+)/i);
+  if (nameMatch && nameMatch[1]) {
+      name = nameMatch[1].trim();
+  }
+
+  const cnicMatch = html.match(/CNIC:\s*(\d+)/i);
+  if (cnicMatch && cnicMatch[1]) {
+      cnic = cnicMatch[1];
+  }
+
+  const addressMatch = html.match(/ADDRESS:\s*([^<]+)/i);
+  if (addressMatch && addressMatch[1]) {
+      address = addressMatch[1].trim();
+  }
+
+  if (mobile || name || cnic || address) {
+    rows.push({
+      Mobile: mobile || null,
+      Name: name || null,
+      CNIC: cnic || null,
+      Address: address || null
+    });
+  }
+
+  return rows;
+}
+
+// 4. Zong
 function parseZongHtml(html) {
   const rows = [];
   
