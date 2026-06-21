@@ -53,15 +53,15 @@ async function fetchTargetSite(value) {
 
   const html = await response.text();
 
-  // SMART DETECTION LOGIC
-  if (html.includes('<table')) {
-    return parseTableHtml(html);
-  } else if (html.includes('MSISDN')) {
-    return parseTelenorHtml(html);
-  } else if (html.includes('NUMBER:')) {
+  // ✅ CORRECTED UNIVERSAL DETECTION (Priority based)
+  if (html.includes('NUMBER:')) {
     return parseUfoneHtml(html);
   } else if (html.includes('MOBILE#')) {
     return parseZongHtml(html);
+  } else if (html.includes('MSISDN')) {
+    return parseTelenorHtml(html);
+  } else if (html.includes('<table')) {
+    return parseTableHtml(html);
   } else {
     return [];
   }
@@ -69,38 +69,96 @@ async function fetchTargetSite(value) {
 
 /* ---------------------- PARSERS ---------------------- */
 
-// 1. Jazz / Generic Table
-function parseTableHtml(html) {
+// 1. Ufone (Priority 1)
+function parseUfoneHtml(html) {
   const rows = [];
-  const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
-  let match;
-  let rowIndex = 0;
+  
+  let mobile = null;
+  let name = null;
+  let cnic = null;
+  let address = null;
 
-  while ((match = rowRegex.exec(html))) {
-    const rowHtml = match[1];
-    const cols = [...rowHtml.matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)].map(
-      (m) => m[1].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim()
-    );
-
-    if (rowIndex === 0) {
-      rowIndex++;
-      continue;
-    }
-
-    if (cols.length >= 4) { 
-      rows.push({
-        Mobile: cols[0] || null,
-        Name: cols[1] || null,
-        CNIC: cols[2] || null,
-        Address: cols[3] || null
-      });
-    }
-    rowIndex++;
+  const mobileMatch = html.match(/NUMBER:\s*(\d+)/i);
+  if (mobileMatch && mobileMatch[1]) {
+      mobile = mobileMatch[1];
   }
+
+  const nameMatch = html.match(/NAME:\s*([^<]+)/i);
+  if (nameMatch && nameMatch[1]) {
+      name = nameMatch[1].trim();
+  }
+
+  const cnicMatch = html.match(/CNIC:\s*(\d+)/i);
+  if (cnicMatch && cnicMatch[1]) {
+      cnic = cnicMatch[1];
+  }
+
+  const addressMatch = html.match(/ADDRESS:\s*([^<]+)/i);
+  if (addressMatch && addressMatch[1]) {
+      address = addressMatch[1].trim();
+  }
+
+  if (mobile || name || cnic || address) {
+    rows.push({
+      Mobile: mobile || null,
+      Name: name || null,
+      CNIC: cnic || null,
+      Address: address || null
+    });
+  }
+
   return rows;
 }
 
-// 2. Telenor
+// 2. Zong (Priority 2)
+function parseZongHtml(html) {
+  const rows = [];
+  
+  let mobile = null;
+  let name = null;
+  let cnic = null;
+  let address = null;
+
+  const mobileMatch = html.match(/MOBILE#:\s*([0-9]+)/i);
+  if (mobileMatch && mobileMatch[1]) {
+      mobile = mobileMatch[1];
+  }
+
+  const nameMatch = html.match(/Date of issue\.\s*[0-9]{2}\s[A-Za-z]+\s[0-9]{4}\s*<br>\s*([A-Za-z\s.]+)/i);
+  if (nameMatch && nameMatch[1]) {
+      name = nameMatch[1].trim();
+  }
+
+  const cnicMatch = html.match(/holder of CNIC no\.[^>]*>\s*<\/td>\s*<td[^>]*>\s*([0-9]+)/i);
+  if (cnicMatch && cnicMatch[1]) {
+      cnic = cnicMatch[1];
+  }
+  
+  if (!cnic) {
+      const allNumbers = html.match(/\b\d{13}\b/g);
+      if (allNumbers && allNumbers.length > 0) {
+          cnic = allNumbers[0];
+      }
+  }
+
+  const addressMatch = html.match(/collected\/deducted from\s*([^<]+)/i);
+  if (addressMatch && addressMatch[1]) {
+      address = addressMatch[1].trim();
+  }
+
+  if (mobile || name || cnic) {
+    rows.push({
+      Mobile: mobile || null,
+      Name: name || null,
+      CNIC: cnic || null,
+      Address: address || null
+    });
+  }
+
+  return rows;
+}
+
+// 3. Telenor (Priority 3)
 function parseTelenorHtml(html) {
   const rows = [];
   
@@ -149,91 +207,33 @@ function parseTelenorHtml(html) {
   return rows;
 }
 
-// 3. Ufone
-function parseUfoneHtml(html) {
+// 4. Jazz / Generic Table (Priority 4 - Last resort)
+function parseTableHtml(html) {
   const rows = [];
-  
-  let mobile = null;
-  let name = null;
-  let cnic = null;
-  let address = null;
+  const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+  let match;
+  let rowIndex = 0;
 
-  const mobileMatch = html.match(/NUMBER:\s*(\d+)/i);
-  if (mobileMatch && mobileMatch[1]) {
-      mobile = mobileMatch[1];
+  while ((match = rowRegex.exec(html))) {
+    const rowHtml = match[1];
+    const cols = [...rowHtml.matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)].map(
+      (m) => m[1].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim()
+    );
+
+    if (rowIndex === 0) {
+      rowIndex++;
+      continue;
+    }
+
+    if (cols.length >= 4) { 
+      rows.push({
+        Mobile: cols[0] || null,
+        Name: cols[1] || null,
+        CNIC: cols[2] || null,
+        Address: cols[3] || null
+      });
+    }
+    rowIndex++;
   }
-
-  const nameMatch = html.match(/NAME:\s*([^<]+)/i);
-  if (nameMatch && nameMatch[1]) {
-      name = nameMatch[1].trim();
-  }
-
-  const cnicMatch = html.match(/CNIC:\s*(\d+)/i);
-  if (cnicMatch && cnicMatch[1]) {
-      cnic = cnicMatch[1];
-  }
-
-  const addressMatch = html.match(/ADDRESS:\s*([^<]+)/i);
-  if (addressMatch && addressMatch[1]) {
-      address = addressMatch[1].trim();
-  }
-
-  if (mobile || name || cnic || address) {
-    rows.push({
-      Mobile: mobile || null,
-      Name: name || null,
-      CNIC: cnic || null,
-      Address: address || null
-    });
-  }
-
-  return rows;
-}
-
-// 4. Zong
-function parseZongHtml(html) {
-  const rows = [];
-  
-  let mobile = null;
-  let name = null;
-  let cnic = null;
-  let address = null;
-
-  const mobileMatch = html.match(/MOBILE#:\s*([0-9]+)/i);
-  if (mobileMatch && mobileMatch[1]) {
-      mobile = mobileMatch[1];
-  }
-
-  const nameMatch = html.match(/Date of issue\.\s*[0-9]{2}\s[A-Za-z]+\s[0-9]{4}\s*<br>\s*([A-Za-z\s.]+)/i);
-  if (nameMatch && nameMatch[1]) {
-      name = nameMatch[1].trim();
-  }
-
-  const cnicMatch = html.match(/holder of CNIC no\.[^>]*>\s*<\/td>\s*<td[^>]*>\s*([0-9]+)/i);
-  if (cnicMatch && cnicMatch[1]) {
-      cnic = cnicMatch[1];
-  }
-  
-  if (!cnic) {
-      const allNumbers = html.match(/\b\d{13}\b/g);
-      if (allNumbers && allNumbers.length > 0) {
-          cnic = allNumbers[0];
-      }
-  }
-
-  const addressMatch = html.match(/collected\/deducted from\s*([^<]+)/i);
-  if (addressMatch && addressMatch[1]) {
-      address = addressMatch[1].trim();
-  }
-
-  if (mobile || name || cnic) {
-    rows.push({
-      Mobile: mobile || null,
-      Name: name || null,
-      CNIC: cnic || null,
-      Address: address || null
-    });
-  }
-
   return rows;
 }
