@@ -1,232 +1,311 @@
-export default {
-  async fetch(request) {
-    try {
-      const url = new URL(request.url);
-      const phone = url.searchParams.get("phone") || 
-                    (request.method === "POST" ? (await request.json()).phone : null);
-
-      if (!phone) {
-        return jsonResponse({ error: "Phone number required (e.g., /?phone=03001234567)" }, 400);
-      }
-
-      const records = await fetchTargetSite(phone);
-
-      return jsonResponse({
-        success: true,
-        searchedPhone: phone,
-        records
-      });
-
-    } catch (error) {
-      return jsonResponse({ success: false, error: error.message }, 500);
-    }
-  }
+var CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
 };
 
-function jsonResponse(data, status = 200) {
+function j(data, status) {
   return new Response(JSON.stringify(data, null, 2), {
-    status,
-    headers: { "Content-Type": "application/json; charset=utf-8" }
+    status: status || 200,
+    headers: Object.assign({ "Content-Type": "application/json" }, CORS_HEADERS),
   });
 }
 
-async function fetchTargetSite(value) {
-  const TARGET_URL = "https://simownerdetailspk.com/numberDetails.php";
-
-  const payload = new URLSearchParams({
-    numberCnic: value,
-    searchNumber: "search"
-  });
-
-  const headers = {
-    "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
-    "Content-Type": "application/x-www-form-urlencoded",
-    "Referer": "https://simownerdetailspk.com/",
-    "Accept": "text/html,application/xhtml+xml"
-  };
-
-  const response = await fetch(TARGET_URL, {
-    method: "POST",
-    headers: headers,
-    body: payload.toString()
-  });
-
-  const html = await response.text();
-
-  if (html.includes('NUMBER:')) {
-    return parseUfoneHtml(html);
-  } else if (html.includes('MOBILE#')) {
-    return parseZongHtml(html);
-  } else if (html.includes('MSISDN')) {
-    return parseTelenorHtml(html);
-  } else if (html.includes('<table')) {
-    return parseTableHtml(html);
-  } else {
-    return [];
-  }
+function safeStr(v) {
+  if (v === null || v === undefined) return null;
+  if (typeof v === "string") return v;
+  if (typeof v === "number") return String(v);
+  if (typeof v === "boolean") return v ? "true" : "false";
+  return null;
 }
 
-function parseUfoneHtml(html) {
-  const rows = [];
-  
-  let mobile = null;
-  let name = null;
-  let cnic = null;
-  let address = null;
-
-  const mobileMatch = html.match(/NUMBER:\s*(\d+)/i);
-  if (mobileMatch && mobileMatch[1]) {
-      mobile = mobileMatch[1];
+function safeNum(v) {
+  if (v === null || v === undefined) return null;
+  if (typeof v === "number") return v;
+  if (typeof v === "string") {
+    var n = Number(v);
+    return isNaN(n) ? null : n;
   }
-
-  const nameMatch = html.match(/NAME:\s*([^<]+)/i);
-  if (nameMatch && nameMatch[1]) {
-      name = nameMatch[1].trim();
-  }
-
-  const cnicMatch = html.match(/CNIC:\s*(\d+)/i);
-  if (cnicMatch && cnicMatch[1]) {
-      cnic = cnicMatch[1];
-  }
-
-  const addressMatch = html.match(/ADDRESS:\s*([^<]+)/i);
-  if (addressMatch && addressMatch[1]) {
-      address = addressMatch[1].trim();
-  }
-
-  if (mobile || name || cnic || address) {
-    rows.push({
-      Mobile: mobile || null,
-      Name: name || null,
-      CNIC: cnic || null,
-      Address: address || null
-    });
-  }
-
-  return rows;
+  return null;
 }
 
-function parseZongHtml(html) {
-  const rows = [];
-  
-  let mobile = null;
-  let name = null;
-  let cnic = null;
-  let address = null;
-
-  const mobileMatch = html.match(/MOBILE#:\s*([0-9]+)/i);
-  if (mobileMatch && mobileMatch[1]) {
-      mobile = mobileMatch[1];
-  }
-
-  const nameMatch = html.match(/Date of issue\.\s*[0-9]{2}\s[A-Za-z]+\s[0-9]{4}\s*<br>\s*([A-Za-z\s.]+)/i);
-  if (nameMatch && nameMatch[1]) {
-      name = nameMatch[1].trim();
-  }
-
-  const cnicMatch = html.match(/holder of CNIC no\.[^>]*>\s*<\/td>\s*<td[^>]*>\s*([0-9]+)/i);
-  if (cnicMatch && cnicMatch[1]) {
-      cnic = cnicMatch[1];
-  }
-  
-  if (!cnic) {
-      const allNumbers = html.match(/\b\d{13}\b/g);
-      if (allNumbers && allNumbers.length > 0) {
-          cnic = allNumbers[0];
-      }
-  }
-
-  const addressMatch = html.match(/collected\/deducted from\s*([^<]+)/i);
-  if (addressMatch && addressMatch[1]) {
-      address = addressMatch[1].trim();
-  }
-
-  if (mobile || name || cnic) {
-    rows.push({
-      Mobile: mobile || null,
-      Name: name || null,
-      CNIC: cnic || null,
-      Address: address || null
-    });
-  }
-
-  return rows;
+function safeBool(v) {
+  if (v === true || v === false) return v;
+  if (typeof v === "string") return v === "true" || v === "1";
+  return null;
 }
 
-function parseTelenorHtml(html) {
-  const rows = [];
-  
-  let mobile = null;
-  let name = null;
-  let cnic = null;
-  let address = null;
-
-  const msisdnMatch = html.match(/MSISDN\s*<\/td>\s*<td[^>]*>\s*(\d+)/i);
-  if (msisdnMatch && msisdnMatch[1]) {
-      mobile = msisdnMatch[1];
+function extractBraced(str, pos) {
+  var depth = 0, inStr = false, esc = false, start = -1;
+  for (var i = pos; i < str.length; i++) {
+    var c = str[i];
+    if (esc) { esc = false; continue; }
+    if (c === '\\' && inStr) { esc = true; continue; }
+    if (c === '"') { inStr = !inStr; continue; }
+    if (!inStr) {
+      if (c === '{') { if (start === -1) start = i; depth++; }
+      else if (c === '}') { depth--; if (depth === 0 && start !== -1) return str.substring(start, i + 1); }
+    }
   }
+  return null;
+}
 
-  const allBorderedTexts = html.match(/border-bottom:2px solid black;">([^<]+)/g);
-  const cleanTexts = [];
-  
-  if (allBorderedTexts) {
-      for(let t of allBorderedTexts) {
-          let clean = t.replace(/.*>/, '').trim();
-          if (clean.length > 2 && clean !== '.' && !clean.includes('Serial') && !clean.includes('MSISDN') && !clean.includes('Certified')) {
-              cleanTexts.push(clean);
+function tryParse(raw) {
+  try { return JSON.parse(raw); } catch (e) {}
+  try {
+    var c = raw.replace(/'/g, '"');
+    c = c.replace(/([{,]\s*)([a-zA-Z_$][a-zA-Z0-9_$]*)(\s*:)/g, '$1"$2"$3');
+    c = c.replace(/:\s*undefined/g, ':null');
+    c = c.replace(/:\s*!1/g, ':false');
+    c = c.replace(/:\s*!0/g, ':true');
+    c = c.replace(/:\s*NaN/g, ':null');
+    return JSON.parse(c);
+  } catch (e) { return null; }
+}
+
+function extractPluginData(html) {
+  var v2idx = html.indexOf('"PagePluginV2"');
+  if (v2idx !== -1) {
+    var objStart = html.indexOf('{', v2idx + 14);
+    if (objStart !== -1) {
+      var outer = extractBraced(html, objStart);
+      if (outer) {
+        var pidx = outer.indexOf('"props"');
+        if (pidx !== -1) {
+          var col = outer.indexOf(':', pidx + 7);
+          if (col !== -1) {
+            var vs = col + 1;
+            while (vs < outer.length && outer[vs] === ' ') vs++;
+            if (outer[vs] === '{') {
+              var ps = extractBraced(outer, vs);
+              if (ps) return tryParse(ps);
+            }
           }
+        }
+        var um = outer.match(/(?:^|[{,])\s*props\s*:/);
+        if (um) {
+          var ustart = um.index + um[0].length;
+          while (ustart < outer.length && outer[ustart] === ' ') ustart++;
+          if (outer[ustart] === '{') {
+            var ups = extractBraced(outer, ustart);
+            if (ups) return tryParse(ups);
+          }
+        }
       }
+    }
   }
 
-  if (cleanTexts.length >= 1) name = cleanTexts[0];
-  if (cleanTexts.length >= 2) address = cleanTexts[1];
-
-  const cnicTdMatch = html.match(/holder of CNIC No\.\s*<\/td>\s*<td[^>]*>([^<]*)/i);
-  if (cnicTdMatch && cnicTdMatch[1]) {
-      let numbersOnly = cnicTdMatch[1].replace(/[^0-9]/g, '');
-      if (numbersOnly.length === 13) {
-          cnic = numbersOnly;
-      }
+  var idx = html.indexOf('"props":{');
+  if (idx !== -1) {
+    var ps = extractBraced(html, idx + 8);
+    if (ps) return tryParse(ps);
   }
 
-  if (mobile || name || cnic || address) {
-    rows.push({
-      Mobile: mobile || null,
-      Name: name || null,
-      CNIC: cnic || null,
-      Address: address || null
+  var um2 = html.match(/(?:^|[{,])\s*props\s*:\s*\{/);
+  if (um2) {
+    var mstart = um2.index + um2[0].length - 1;
+    var ps2 = extractBraced(html, mstart);
+    if (ps2) return tryParse(ps2);
+  }
+
+  return null;
+}
+
+function extractOGMeta(html) {
+  var meta = {};
+  var regex = /<meta\s+(?:property|name)=["']([^"']+)["']\s+content=["']([^"']*)["']/gi;
+  var m;
+  while ((m = regex.exec(html)) !== null) {
+    meta[m[1]] = m[2];
+  }
+  return meta;
+}
+
+function extractPageId(meta) {
+  var url = meta["al:android:url"] || meta["al:ios:url"] || "";
+  var m = url.match(/profile\/(\d+)/);
+  return m ? m[1] : null;
+}
+
+function parseFollowerCount(str) {
+  if (!str) return null;
+  str = str.replace(/,/g, "").trim();
+  var m = str.match(/^([\d.]+)([MKBT]?)/i);
+  if (!m) return null;
+  var num = parseFloat(m[1]);
+  var suffix = m[2].toUpperCase();
+  if (suffix === "M") num *= 1000000;
+  else if (suffix === "K") num *= 1000;
+  else if (suffix === "B") num *= 1000000000;
+  else if (suffix === "T") num *= 1000000000000;
+  return Math.round(num);
+}
+
+function parseLikesFromDesc(desc) {
+  if (!desc) return { likes: null, talking_about: null };
+  var likes = null, talking = null;
+  var m1 = desc.match(/([\d,.]+)\s*(?:likes|like)/i);
+  if (m1) likes = parseInt(m1[1].replace(/,/g, ""));
+  var m2 = desc.match(/([\d,.]+)\s*(?:talking about this|talking about)/i);
+  if (m2) talking = parseInt(m2[1].replace(/,/g, ""));
+  return { likes, talking_about: talking };
+}
+
+function formatTime(ts) {
+  if (!ts) return null;
+  return new Date(ts * 1000).toISOString();
+}
+
+function xPost(p) {
+  var type = "unknown";
+  var at = (p.attachmentType || "").toLowerCase();
+  if (at === "photo" || at === "album") type = at;
+  else if (at === "video") type = "video";
+  else if (at === "link") type = "link";
+  else if (at === "share") type = "share";
+  else if (at === "event") type = "event";
+  else if (at === "music") type = "music";
+
+  var photos = null;
+  if (p.albumPhotoURLs && Array.isArray(p.albumPhotoURLs) && p.albumPhotoURLs.length > 0) {
+    photos = p.albumPhotoURLs.map(function(url) {
+      return { url: url, width: p.photoWidth || null, height: p.photoHeight || null };
+    });
+  } else if (p.photoURL) {
+    photos = [{ url: p.photoURL, width: p.photoWidth || null, height: p.photoHeight || null }];
+  }
+
+  return {
+    message: p.message || null,
+    created_time: p.createdTime || null,
+    created_time_iso: formatTime(p.createdTime),
+    type: type,
+    photos: photos,
+    photo_count: p.albumPhotoCount || (p.photoURL ? 1 : null),
+    video_duration_ms: p.videoDurationMs || null,
+    link_title: p.linkTitle || null,
+    link_domain: p.linkDomain || null,
+    attached_story: p.attachedStory || null,
+    reactions: p.reactionCount || null,
+    comments: p.commentCount || null,
+    shares: p.shareCount || null,
+  };
+}
+
+async function handleRequest(request) {
+  var url = new URL(request.url);
+  var path = url.pathname;
+
+  if (request.method === "OPTIONS") {
+    return new Response("", { status: 204, headers: CORS_HEADERS });
+  }
+
+  if (path === "/" || path === "") {
+    return j({
+      service: "Facebook Page Scraper v1.0",
+      note: "Zero config. Copy, Paste, Deploy.",
+      endpoints: {
+        "/info?page=<username>": "Full page info with timeline posts",
+      },
     });
   }
 
-  return rows;
-}
+  if (path === "/info") {
+    var pageName = url.searchParams.get("page");
+    var postsLimit = parseInt(url.searchParams.get("posts")) || 10;
 
-function parseTableHtml(html) {
-  const rows = [];
-  const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
-  let match;
-  let rowIndex = 0;
-
-  while ((match = rowRegex.exec(html))) {
-    const rowHtml = match[1];
-    const cols = [...rowHtml.matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)].map(
-      (m) => m[1].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim()
-    );
-
-    if (rowIndex === 0) {
-      rowIndex++;
-      continue;
+    if (!pageName) {
+      return j({ error: "missing_page", message: "Provide ?page=<username> (e.g., ?page=GoogleIndia)" }, 400);
     }
 
-    if (cols.length >= 4) { 
-      rows.push({
-        Mobile: cols[0] || null,
-        Name: cols[1] || null,
-        CNIC: cols[2] || null,
-        Address: cols[3] || null
+    pageName = pageName.trim();
+    if (pageName.startsWith("https://") || pageName.startsWith("http://")) {
+      var m = pageName.match(/facebook\.com\/([^\/?#]+)/);
+      if (m) pageName = m[1];
+    }
+    pageName = pageName.replace(/^\//, "");
+
+    var pageUrl = "https://www.facebook.com/" + encodeURIComponent(pageName);
+
+    try {
+      var pluginUrl = "https://www.facebook.com/plugins/page.php?href=" +
+        encodeURIComponent(pageUrl) + "&tabs=timeline&width=500&height=700";
+
+      var pluginResp = await fetch(pluginUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+          "Accept-Language": "en-US,en;q=0.9",
+          "Accept": "text/html,application/xhtml+xml",
+        },
       });
+
+      var pluginHtml = await pluginResp.text();
+      var pluginData = extractPluginData(pluginHtml);
+
+      if (!pluginData) {
+        var mainResp = await fetch(pageUrl, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+          },
+        });
+        var mainHtml = await mainResp.text();
+        var ogMeta = extractOGMeta(mainHtml);
+
+        return j({
+          error: "parse_failed",
+          message: "Could not parse page plugin data. Try a different page name.",
+          meta: ogMeta,
+        }, 422);
+      }
+
+      var descStats = parseLikesFromDesc(pluginData.pageDescription || "");
+
+      var profile = {
+        id: pluginData.pageID || extractPageId({}) || null,
+        name: pluginData.pageName || null,
+        username: pageName,
+        url: pageUrl,
+        page_url: pluginData.pageURL || null,
+        description: pluginData.pageDescription || null,
+        category: pluginData.pageCategory || null,
+        followers: pluginData.followerCountFormatted || null,
+        followers_raw: parseFollowerCount(pluginData.followerCountFormatted),
+        likes: descStats.likes,
+        talking_about: descStats.talking_about,
+        verified: safeBool(pluginData.isVerified),
+        profile_pic: pluginData.profilePicURL || null,
+        cover_photo: pluginData.coverPhotoURL || null,
+        price_range: pluginData.pagePriceRange || null,
+        phone: pluginData.pagePhone || null,
+        instagram: pluginData.pageInstagram || null,
+        website: null,
+      };
+
+      var posts = [];
+      if (pluginData.timelinePosts && Array.isArray(pluginData.timelinePosts)) {
+        var sliced = pluginData.timelinePosts.slice(0, postsLimit);
+        posts = sliced.map(xPost);
+      }
+
+      return j({
+        success: true,
+        profile: profile,
+        posts: posts,
+        posts_fetched: posts.length,
+        posts_total: pluginData.timelinePosts ? pluginData.timelinePosts.length : 0,
+        fetched_at: new Date().toISOString(),
+      });
+
+    } catch (e) {
+      return j({ error: "fetch_failed", message: e.message }, 500);
     }
-    rowIndex++;
   }
-  return rows;
+
+  return j({ error: "not_found", message: "Endpoint not found. Use /info?page=<username>" }, 404);
 }
+
+addEventListener("fetch", function(event) {
+  event.respondWith(handleRequest(event.request));
+});
+// src by @ftgamer2 🐱‍👤
