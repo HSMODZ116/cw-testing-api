@@ -1,311 +1,279 @@
-var CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
+/**
+ * ╔══════════════════════════════════════════════════════════════════╗
+ * ║           Super Resolution API — Cloudflare Worker              ║
+ * ║                                                                  ║
+ * ║  Creator  : https://t.me/Ashlynn_Repository                     ║
+ * ║  Version  : 1.0.0                                               ║
+ * ║  Platform : Cloudflare Workers                                   ║
+ * ║  Powered  : Visual Paradigm Super Resolution API                 ║
+ * ╚══════════════════════════════════════════════════════════════════╝
+ *
+ * ─────────────────────────────────────────────────────────────────
+ *  DEPLOYMENT GUIDE
+ * ─────────────────────────────────────────────────────────────────
+ *
+ *  OPTION A — Cloudflare Dashboard (easiest, no CLI needed)
+ *  ─────────────────────────────────────────────────────────
+ *  1. Go to https://workers.cloudflare.com and sign in
+ *     (or create a free account — no credit card required).
+ *
+ *  2. Click "Create Application" → "Create Worker".
+ *
+ *  3. Give your worker a name (e.g. "super-resolution"), then click
+ *     "Deploy" to create it with the default Hello World code.
+ *
+ *  4. Click "Edit code" to open the online editor.
+ *
+ *  5. Select ALL the default code in the editor and DELETE it.
+ *
+ *  6. Paste THIS entire file into the editor.
+ *
+ *  7. Click "Deploy" (top-right). Done! ✅
+ *     Your endpoint will be:
+ *     https://<worker-name>.<your-subdomain>.workers.dev
+ *
+ * ─────────────────────────────────────────────────────────────────
+ *
+ *  OPTION B — Wrangler CLI
+ *  ────────────────────────
+ *  1. npm install -g wrangler
+ *  2. wrangler login
+ *  3. wrangler deploy worker.js --name super-resolution --compatibility-date 2024-01-01
+ *
+ * ─────────────────────────────────────────────────────────────────
+ *
+ *  USAGE
+ *  ──────
+ *  GET  ?imageUrl=https://example.com/photo.jpg
+ *  POST {"imageUrl": "https://example.com/photo.jpg"}
+ *  POST {"imageUrl": "data:image/png;base64,<base64string>"}
+ *
+ *  Response: raw upscaled image binary (same content-type as input)
+ *
+ * ─────────────────────────────────────────────────────────────────
+ */
+
+// ─── CORS & Custom Headers ────────────────────────────────────────
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With, Accept, Origin, Cache-Control, Pragma',
+  'Access-Control-Expose-Headers': 'X-Powered-By, X-API-Version, X-Response-Time',
+  'Access-Control-Max-Age': '86400',
+  'X-Powered-By': 'Cloudflare Workers',
+  'X-API-Version': '1.0',
+  'X-Creator': 'https://t.me/Ashlynn_Repository',
+  'Cache-Control': 'no-cache, no-store, must-revalidate',
+  'Pragma': 'no-cache',
+  'Expires': '0',
+  'Access-Control-Allow-Credentials': 'false',
 };
 
-function j(data, status) {
-  return new Response(JSON.stringify(data, null, 2), {
-    status: status || 200,
-    headers: Object.assign({ "Content-Type": "application/json" }, CORS_HEADERS),
-  });
-}
-
-function safeStr(v) {
-  if (v === null || v === undefined) return null;
-  if (typeof v === "string") return v;
-  if (typeof v === "number") return String(v);
-  if (typeof v === "boolean") return v ? "true" : "false";
-  return null;
-}
-
-function safeNum(v) {
-  if (v === null || v === undefined) return null;
-  if (typeof v === "number") return v;
-  if (typeof v === "string") {
-    var n = Number(v);
-    return isNaN(n) ? null : n;
+class ApiError extends Error {
+  constructor(message, status = 500) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.isApiError = true;
   }
-  return null;
 }
 
-function safeBool(v) {
-  if (v === true || v === false) return v;
-  if (typeof v === "string") return v === "true" || v === "1";
-  return null;
-}
+// ─── API Client ───────────────────────────────────────────────────
+class ApiClient {
+  constructor() {
+    this.baseUrl = 'https://ai-services.visual-paradigm.com/api/super-resolution/file';
+    this.timeout = 25000;
+  }
 
-function extractBraced(str, pos) {
-  var depth = 0, inStr = false, esc = false, start = -1;
-  for (var i = pos; i < str.length; i++) {
-    var c = str[i];
-    if (esc) { esc = false; continue; }
-    if (c === '\\' && inStr) { esc = true; continue; }
-    if (c === '"') { inStr = !inStr; continue; }
-    if (!inStr) {
-      if (c === '{') { if (start === -1) start = i; depth++; }
-      else if (c === '}') { depth--; if (depth === 0 && start !== -1) return str.substring(start, i + 1); }
+  async _processInput(imageUrl) {
+    if (imageUrl instanceof ArrayBuffer || ArrayBuffer.isView(imageUrl)) {
+      return {
+        buffer: imageUrl instanceof ArrayBuffer ? imageUrl : imageUrl.buffer,
+        contentType: 'image/png',
+      };
     }
-  }
-  return null;
-}
 
-function tryParse(raw) {
-  try { return JSON.parse(raw); } catch (e) {}
-  try {
-    var c = raw.replace(/'/g, '"');
-    c = c.replace(/([{,]\s*)([a-zA-Z_$][a-zA-Z0-9_$]*)(\s*:)/g, '$1"$2"$3');
-    c = c.replace(/:\s*undefined/g, ':null');
-    c = c.replace(/:\s*!1/g, ':false');
-    c = c.replace(/:\s*!0/g, ':true');
-    c = c.replace(/:\s*NaN/g, ':null');
-    return JSON.parse(c);
-  } catch (e) { return null; }
-}
+    if (typeof imageUrl !== 'string') {
+      throw new ApiError('Invalid input: must be a URL string or base64 string.', 400);
+    }
 
-function extractPluginData(html) {
-  var v2idx = html.indexOf('"PagePluginV2"');
-  if (v2idx !== -1) {
-    var objStart = html.indexOf('{', v2idx + 14);
-    if (objStart !== -1) {
-      var outer = extractBraced(html, objStart);
-      if (outer) {
-        var pidx = outer.indexOf('"props"');
-        if (pidx !== -1) {
-          var col = outer.indexOf(':', pidx + 7);
-          if (col !== -1) {
-            var vs = col + 1;
-            while (vs < outer.length && outer[vs] === ' ') vs++;
-            if (outer[vs] === '{') {
-              var ps = extractBraced(outer, vs);
-              if (ps) return tryParse(ps);
-            }
-          }
+    if (imageUrl.startsWith('http')) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), this.timeout);
+      try {
+        const response = await fetch(imageUrl, { signal: controller.signal });
+        clearTimeout(timer);
+        if (!response.ok) {
+          throw new ApiError(`Failed to download image. Status: ${response.status}`, 400);
         }
-        var um = outer.match(/(?:^|[{,])\s*props\s*:/);
-        if (um) {
-          var ustart = um.index + um[0].length;
-          while (ustart < outer.length && outer[ustart] === ' ') ustart++;
-          if (outer[ustart] === '{') {
-            var ups = extractBraced(outer, ustart);
-            if (ups) return tryParse(ups);
-          }
+        const contentType = response.headers.get('content-type') || '';
+        if (!contentType.startsWith('image/')) {
+          throw new ApiError(
+            `URL does not point to an image file. Found: ${contentType || 'unknown'}`,
+            400
+          );
         }
+        const buffer = await response.arrayBuffer();
+        return { buffer, contentType };
+      } catch (err) {
+        clearTimeout(timer);
+        if (err instanceof ApiError) throw err;
+        throw new ApiError('Failed to download image from URL.', 400);
       }
     }
-  }
-
-  var idx = html.indexOf('"props":{');
-  if (idx !== -1) {
-    var ps = extractBraced(html, idx + 8);
-    if (ps) return tryParse(ps);
-  }
-
-  var um2 = html.match(/(?:^|[{,])\s*props\s*:\s*\{/);
-  if (um2) {
-    var mstart = um2.index + um2[0].length - 1;
-    var ps2 = extractBraced(html, mstart);
-    if (ps2) return tryParse(ps2);
-  }
-
-  return null;
-}
-
-function extractOGMeta(html) {
-  var meta = {};
-  var regex = /<meta\s+(?:property|name)=["']([^"']+)["']\s+content=["']([^"']*)["']/gi;
-  var m;
-  while ((m = regex.exec(html)) !== null) {
-    meta[m[1]] = m[2];
-  }
-  return meta;
-}
-
-function extractPageId(meta) {
-  var url = meta["al:android:url"] || meta["al:ios:url"] || "";
-  var m = url.match(/profile\/(\d+)/);
-  return m ? m[1] : null;
-}
-
-function parseFollowerCount(str) {
-  if (!str) return null;
-  str = str.replace(/,/g, "").trim();
-  var m = str.match(/^([\d.]+)([MKBT]?)/i);
-  if (!m) return null;
-  var num = parseFloat(m[1]);
-  var suffix = m[2].toUpperCase();
-  if (suffix === "M") num *= 1000000;
-  else if (suffix === "K") num *= 1000;
-  else if (suffix === "B") num *= 1000000000;
-  else if (suffix === "T") num *= 1000000000000;
-  return Math.round(num);
-}
-
-function parseLikesFromDesc(desc) {
-  if (!desc) return { likes: null, talking_about: null };
-  var likes = null, talking = null;
-  var m1 = desc.match(/([\d,.]+)\s*(?:likes|like)/i);
-  if (m1) likes = parseInt(m1[1].replace(/,/g, ""));
-  var m2 = desc.match(/([\d,.]+)\s*(?:talking about this|talking about)/i);
-  if (m2) talking = parseInt(m2[1].replace(/,/g, ""));
-  return { likes, talking_about: talking };
-}
-
-function formatTime(ts) {
-  if (!ts) return null;
-  return new Date(ts * 1000).toISOString();
-}
-
-function xPost(p) {
-  var type = "unknown";
-  var at = (p.attachmentType || "").toLowerCase();
-  if (at === "photo" || at === "album") type = at;
-  else if (at === "video") type = "video";
-  else if (at === "link") type = "link";
-  else if (at === "share") type = "share";
-  else if (at === "event") type = "event";
-  else if (at === "music") type = "music";
-
-  var photos = null;
-  if (p.albumPhotoURLs && Array.isArray(p.albumPhotoURLs) && p.albumPhotoURLs.length > 0) {
-    photos = p.albumPhotoURLs.map(function(url) {
-      return { url: url, width: p.photoWidth || null, height: p.photoHeight || null };
-    });
-  } else if (p.photoURL) {
-    photos = [{ url: p.photoURL, width: p.photoWidth || null, height: p.photoHeight || null }];
-  }
-
-  return {
-    message: p.message || null,
-    created_time: p.createdTime || null,
-    created_time_iso: formatTime(p.createdTime),
-    type: type,
-    photos: photos,
-    photo_count: p.albumPhotoCount || (p.photoURL ? 1 : null),
-    video_duration_ms: p.videoDurationMs || null,
-    link_title: p.linkTitle || null,
-    link_domain: p.linkDomain || null,
-    attached_story: p.attachedStory || null,
-    reactions: p.reactionCount || null,
-    comments: p.commentCount || null,
-    shares: p.shareCount || null,
-  };
-}
-
-async function handleRequest(request) {
-  var url = new URL(request.url);
-  var path = url.pathname;
-
-  if (request.method === "OPTIONS") {
-    return new Response("", { status: 204, headers: CORS_HEADERS });
-  }
-
-  if (path === "/" || path === "") {
-    return j({
-      service: "Facebook Page Scraper v1.0",
-      note: "Zero config. Copy, Paste, Deploy.",
-      endpoints: {
-        "/info?page=<username>": "Full page info with timeline posts",
-      },
-    });
-  }
-
-  if (path === "/info") {
-    var pageName = url.searchParams.get("page");
-    var postsLimit = parseInt(url.searchParams.get("posts")) || 10;
-
-    if (!pageName) {
-      return j({ error: "missing_page", message: "Provide ?page=<username> (e.g., ?page=GoogleIndia)" }, 400);
-    }
-
-    pageName = pageName.trim();
-    if (pageName.startsWith("https://") || pageName.startsWith("http://")) {
-      var m = pageName.match(/facebook\.com\/([^\/?#]+)/);
-      if (m) pageName = m[1];
-    }
-    pageName = pageName.replace(/^\//, "");
-
-    var pageUrl = "https://www.facebook.com/" + encodeURIComponent(pageName);
 
     try {
-      var pluginUrl = "https://www.facebook.com/plugins/page.php?href=" +
-        encodeURIComponent(pageUrl) + "&tabs=timeline&width=500&height=700";
+      const match = imageUrl.match(/^data:(image\/.+?);base64,/);
+      const base64Data = match ? imageUrl.substring(match[0].length) : imageUrl;
+      const contentType = match ? match[1] : 'image/png';
 
-      var pluginResp = await fetch(pluginUrl, {
+      const binaryString = atob(base64Data);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      return { buffer: bytes.buffer, contentType };
+    } catch {
+      throw new ApiError('Invalid base64 string.', 400);
+    }
+  }
+
+  async generate({ imageUrl }) {
+    const { buffer, contentType } = await this._processInput(imageUrl);
+
+    const boundary = `----FormBoundary${Math.random().toString(36).slice(2)}`;
+    const enc = new TextEncoder();
+
+    const preamble = enc.encode(
+      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="image.png"\r\nContent-Type: ${contentType}\r\n\r\n`
+    );
+    const closing = enc.encode(`\r\n--${boundary}--\r\n`);
+
+    const parts = [preamble, new Uint8Array(buffer), closing];
+    const total = parts.reduce((n, p) => n + p.byteLength, 0);
+    const body = new Uint8Array(total);
+    let offset = 0;
+    for (const part of parts) {
+      body.set(part, offset);
+      offset += part.byteLength;
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeout);
+
+    let response;
+    try {
+      response = await fetch(this.baseUrl, {
+        method: 'POST',
         headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
-          "Accept-Language": "en-US,en;q=0.9",
-          "Accept": "text/html,application/xhtml+xml",
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          Accept: '*/*',
+        },
+        body: body.buffer,
+        signal: controller.signal,
+      });
+    } catch {
+      clearTimeout(timer);
+      throw new ApiError('External API failed to respond.', 502);
+    }
+    clearTimeout(timer);
+
+    if (!response.ok) {
+      throw new ApiError(
+        `External API returned an error. Status: ${response.status}`,
+        response.status
+      );
+    }
+
+    const resultBuffer = await response.arrayBuffer();
+    if (!resultBuffer || resultBuffer.byteLength === 0) {
+      throw new ApiError('External API returned an empty response.', 502);
+    }
+
+    return { resultBuffer, contentType };
+  }
+}
+
+export default {
+  async fetch(request) {
+    const startTime = Date.now();
+
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: CORS_HEADERS });
+    }
+
+    if (!['GET', 'POST'].includes(request.method)) {
+      return new Response(JSON.stringify({ error: 'Method not allowed.' }), {
+        status: 405,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      });
+    }
+
+    let imageUrl = null;
+
+    try {
+      if (request.method === 'POST') {
+        const ct = request.headers.get('content-type') || '';
+        if (ct.includes('application/json')) {
+          const body = await request.json();
+          imageUrl = body.imageUrl ?? null;
+        } else if (ct.includes('application/x-www-form-urlencoded')) {
+          const params = new URLSearchParams(await request.text());
+          imageUrl = params.get('imageUrl');
+        } else {
+          try {
+            const body = await request.json();
+            imageUrl = body.imageUrl ?? null;
+          } catch {
+            imageUrl = null;
+          }
+        }
+      } else {
+        imageUrl = new URL(request.url).searchParams.get('imageUrl');
+      }
+
+      if (!imageUrl) {
+        return new Response(JSON.stringify({ error: "Parameter 'imageUrl' is required." }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const { resultBuffer, contentType } = await new ApiClient().generate({ imageUrl });
+      const elapsed = Date.now() - startTime;
+
+      return new Response(resultBuffer, {
+        status: 200,
+        headers: {
+          ...CORS_HEADERS,
+          'Content-Type': contentType,
+          'X-Response-Time': `${elapsed}ms`,
         },
       });
 
-      var pluginHtml = await pluginResp.text();
-      var pluginData = extractPluginData(pluginHtml);
+    } catch (err) {
+      console.error('Worker Error:', err instanceof Error ? err.message : err);
+      const elapsed = Date.now() - startTime;
 
-      if (!pluginData) {
-        var mainResp = await fetch(pageUrl, {
+      if (err instanceof ApiError) {
+        return new Response(JSON.stringify({ error: err.message }), {
+          status: err.status,
           headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
-            "Accept-Language": "en-US,en;q=0.9",
+            ...CORS_HEADERS,
+            'Content-Type': 'application/json',
+            'X-Response-Time': `${elapsed}ms`,
           },
         });
-        var mainHtml = await mainResp.text();
-        var ogMeta = extractOGMeta(mainHtml);
-
-        return j({
-          error: "parse_failed",
-          message: "Could not parse page plugin data. Try a different page name.",
-          meta: ogMeta,
-        }, 422);
       }
 
-      var descStats = parseLikesFromDesc(pluginData.pageDescription || "");
-
-      var profile = {
-        id: pluginData.pageID || extractPageId({}) || null,
-        name: pluginData.pageName || null,
-        username: pageName,
-        url: pageUrl,
-        page_url: pluginData.pageURL || null,
-        description: pluginData.pageDescription || null,
-        category: pluginData.pageCategory || null,
-        followers: pluginData.followerCountFormatted || null,
-        followers_raw: parseFollowerCount(pluginData.followerCountFormatted),
-        likes: descStats.likes,
-        talking_about: descStats.talking_about,
-        verified: safeBool(pluginData.isVerified),
-        profile_pic: pluginData.profilePicURL || null,
-        cover_photo: pluginData.coverPhotoURL || null,
-        price_range: pluginData.pagePriceRange || null,
-        phone: pluginData.pagePhone || null,
-        instagram: pluginData.pageInstagram || null,
-        website: null,
-      };
-
-      var posts = [];
-      if (pluginData.timelinePosts && Array.isArray(pluginData.timelinePosts)) {
-        var sliced = pluginData.timelinePosts.slice(0, postsLimit);
-        posts = sliced.map(xPost);
-      }
-
-      return j({
-        success: true,
-        profile: profile,
-        posts: posts,
-        posts_fetched: posts.length,
-        posts_total: pluginData.timelinePosts ? pluginData.timelinePosts.length : 0,
-        fetched_at: new Date().toISOString(),
+      return new Response(JSON.stringify({ error: 'An internal server error occurred.' }), {
+        status: 500,
+        headers: {
+          ...CORS_HEADERS,
+          'Content-Type': 'application/json',
+          'X-Response-Time': `${elapsed}ms`,
+        },
       });
-
-    } catch (e) {
-      return j({ error: "fetch_failed", message: e.message }, 500);
     }
-  }
-
-  return j({ error: "not_found", message: "Endpoint not found. Use /info?page=<username>" }, 404);
-}
-
-addEventListener("fetch", function(event) {
-  event.respondWith(handleRequest(event.request));
-});
-// src by @ftgamer2 🐱‍👤
+  },
+};
