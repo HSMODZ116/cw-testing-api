@@ -21,8 +21,8 @@ export default {
     }
 
     try {
-      // APNI FRESH COOKIE YAHAN PASTE KAREIN
-      const myCookies = '_ga=GA1.1.906072907.1783902489; PHPSESSID=biudfic7422bc6d8fpgremeu0ih; _ga_V41WE16KKG=GS1.1.1783902488%7Cs1g1%7C...';
+      // ** 1. APNI EXACT COOKIES YAHAN PASTE KAREIN (Image 6 se copy karein) **
+      const myCookies = '_ga=GA1.1.906072907.1783902489; PHPSESSID=biudfic7422bc6d8fpgremeu0ih; _ga_V41WE16KKG=GS1.1.1783902488%7Cs1g1%7C117...'; 
 
       const targetUrl = 'https://paksim.xyz/pig-search.php';
       
@@ -32,9 +32,13 @@ export default {
       const response = await fetch(targetUrl, {
         method: 'POST',
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36',
-          'Accept': 'text/html,application/xhtml+xml',
+          'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36',
+          
+          // ** 2. SABSE ZAROORI FIX: Accept header ko JSON set kiya **
+          'Accept': 'application/json, text/javascript, */*; q=0.01', 
+          
           'Content-Type': 'application/x-www-form-urlencoded',
+          'X-Requested-With': 'XMLHttpRequest',
           'Origin': 'https://paksim.xyz',
           'Referer': 'https://paksim.xyz/',
           'Cookie': myCookies
@@ -42,60 +46,20 @@ export default {
         body: formData.toString()
       });
 
-      const text = await response.text();
+      // Ab hum seedha JSON parse karenge (HTML parse nahi)
+      const data = await response.json();
 
-      // 1. Pehle check karo agar JSON hai toh seedha return kar do
-      try {
-        const jsonData = JSON.parse(text);
-        return new Response(JSON.stringify(jsonData), {
-          status: 200,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      } catch (_) {
-        // 2. Agar JSON nahi hai toh HTMLRewriter se data nikaalo
-        let scrapedData = { ok: true, data: [{ nbr: phone, nam: "Not Found", cni: "Not Found", adr: "Not Found" }] };
-        
-        let currentKey = '';
-        let foundData = {};
-
-        const rewriter = new HTMLRewriter()
-          .on('div[class*="record"]', { // "record" wale div ko dhoondhega (Jaise aapki image mein hai)
-            element(element) {
-              // Bas ye confirm kar rahe hain ki element mila
-            }
-          })
-          .on('div:matches(NAME|CNIC|ADDRESS)', { // NAME, CNIC, ADDRESS likha hua div dhoondhega
-            text(text) {
-              const clean = text.text.trim();
-              if(clean === 'NAME') currentKey = 'nam';
-              else if(clean === 'CNIC') currentKey = 'cni';
-              else if(clean === 'ADDRESS') currentKey = 'adr';
-            }
-          })
-          .on('div:matches(NAME|CNIC|ADDRESS) + div', { // Label ke agle div mein value hogi
-            text(text) {
-              if (currentKey && text.text.trim()) {
-                foundData[currentKey] = text.text.trim();
-                currentKey = ''; // Reset kar do
-              }
-            }
-          });
-
-        await rewriter.transform(new Response(text)).text();
-
-        // Agar humein data mil gaya, toh update kar do
-        if (foundData.nam) {
-          scrapedData.data[0] = { ...scrapedData.data[0], ...foundData };
-        }
-
-        return new Response(JSON.stringify(scrapedData), {
-          status: 200,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
+      return new Response(JSON.stringify(data), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
 
     } catch (error) {
-      return new Response(JSON.stringify({ error: 'Failed to fetch data', details: error.message }), {
+      // Agar error aata hai toh usko batayen
+      return new Response(JSON.stringify({ 
+        error: 'API call failed. Most likely your Cookie (PHPSESSID) has expired.', 
+        details: error.message 
+      }), {
         status: 500,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
