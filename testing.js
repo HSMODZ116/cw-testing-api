@@ -24,13 +24,11 @@ export default {
     if (!query) {
       return jsonResponse({ 
         success: false, 
-        error: "Missing 'query' parameter." 
+        error: "Missing 'query' parameter. Use ?query=03001234567" 
       }, 400);
     }
 
     const cleaned = query.replace(/[^0-9]/g, '');
-
-    // ✅ CNIC & MOBILE BOTH ALLOWED (13 digits or 11/12 digits mobile)
     if (!/^(\d{11}|\d{12}|\d{13})$/.test(cleaned)) {
       return jsonResponse({
         success: false,
@@ -38,7 +36,7 @@ export default {
       }, 400);
     }
 
-    const records = await fetchPakSimSite(cleaned);
+    const records = await fetchPakSimXyz(cleaned);
 
     if (!records || records.length === 0) {
       return jsonResponse({
@@ -68,39 +66,40 @@ function jsonResponse(data, status = 200) {
   });
 }
 
-async function fetchPakSimSite(value) {
-  const TARGET_URL = "https://paksim.site/api/getData";
+// Hit the internal PHP API
+async function fetchPakSimXyz(value) {
+  const TARGET_URL = "https://paksim.xyz/psg-search.php";
   
-  const payload = JSON.stringify({
-    number: value
+  const payload = new URLSearchParams({
+    q: value
   });
 
   const headers = {
     "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
-    "Content-Type": "application/json",
-    "Origin": "https://paksim.site",
-    "Referer": "https://paksim.site/",
-    "Accept": "application/json, text/plain, */*",
-    "Cookie": "cf_clearance=LgFJAv6hmRYv5zt3aZDxRVVg3pY9_6ZviL2p_tLgf; __cf_bm=1; _ga=...; _gid=...; _ga_...;"
+    "Content-Type": "application/x-www-form-urlencoded",
+    "Origin": "https://paksim.xyz",
+    "Referer": "https://paksim.xyz/",
+    "Accept": "application/json, text/plain, */*"
   };
 
   try {
     const response = await fetch(TARGET_URL, {
       method: "POST",
       headers: headers,
-      body: payload
+      body: payload.toString()
     });
 
     if (!response.ok) return [];
     const json = await response.json();
 
-    if (json.success && json.data) {
-      return [{
-        Mobile: json.data.number || null,
-        Name: json.data.name || null,
-        CNIC: json.data.cnic || null,
-        Address: json.data.address || null
-      }];
+    // Check karain ke API response successful hai
+    if (json.ok && Array.isArray(json.data)) {
+      return json.data.map(item => ({
+        Mobile: item.nbr || null,
+        Name: item.nam || null,
+        CNIC: item.cni || null,
+        Address: item.adr || null
+      }));
     }
     return [];
   } catch (e) {
