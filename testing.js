@@ -21,8 +21,7 @@ export default {
     }
 
     try {
-      // **⚠️ ZAROORI: Aapki current active cookies yahan paste karein (Image 4 se)** 
-      // Agar purani cookie kaam nahi kar rahi, toh mobile se login karke nayi cookie copy karein.
+      // APNI FRESH COOKIE YAHAN PASTE KAREIN
       const myCookies = '_ga=GA1.1.906072907.1783902489; PHPSESSID=biudfic7422bc6d8fpgremeu0ih; _ga_V41WE16KKG=GS1.1.1783902488%7Cs1g1%7C...';
 
       const targetUrl = 'https://paksim.xyz/pig-search.php';
@@ -33,8 +32,8 @@ export default {
       const response = await fetch(targetUrl, {
         method: 'POST',
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8', // HTML accept kar rahe hain
+          'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36',
+          'Accept': 'text/html,application/xhtml+xml',
           'Content-Type': 'application/x-www-form-urlencoded',
           'Origin': 'https://paksim.xyz',
           'Referer': 'https://paksim.xyz/',
@@ -43,34 +42,51 @@ export default {
         body: formData.toString()
       });
 
-      // Pehle try karte hain agar JSON hai
-      const textData = await response.text();
+      const text = await response.text();
 
-      // Agar JSON hai toh seedha return
+      // 1. Pehle check karo agar JSON hai toh seedha return kar do
       try {
-        const jsonData = JSON.parse(textData);
+        const jsonData = JSON.parse(text);
         return new Response(JSON.stringify(jsonData), {
           status: 200,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
-      } catch (e) {
-        // Agar JSON parse fail hua (matlab HTML aaya), toh HTML se data scrape karo
-        console.log("JSON parse failed. Scraping HTML...");
+      } catch (_) {
+        // 2. Agar JSON nahi hai toh HTMLRewriter se data nikaalo
+        let scrapedData = { ok: true, data: [{ nbr: phone, nam: "Not Found", cni: "Not Found", adr: "Not Found" }] };
         
-        // Simple Regex se data nikal rahe hain (Image 2 ke text ke hisaab se)
-        const nameMatch = textData.match(/NAME[\s\S]*?([A-Za-z\s.]+)/);
-        const cnicMatch = textData.match(/CNIC[\s\S]*?([0-9]+)/);
-        const addressMatch = textData.match(/ADDRESS[\s\S]*?([A-Za-z0-9\s.,]+)/);
+        let currentKey = '';
+        let foundData = {};
 
-        const scrapedData = {
-          ok: true,
-          data: [{
-            nbr: phone,
-            nam: nameMatch ? nameMatch[1].trim() : "Not Found",
-            cni: cnicMatch ? cnicMatch[1].trim() : "Not Found",
-            adr: addressMatch ? addressMatch[1].trim() : "Not Found"
-          }]
-        };
+        const rewriter = new HTMLRewriter()
+          .on('div[class*="record"]', { // "record" wale div ko dhoondhega (Jaise aapki image mein hai)
+            element(element) {
+              // Bas ye confirm kar rahe hain ki element mila
+            }
+          })
+          .on('div:matches(NAME|CNIC|ADDRESS)', { // NAME, CNIC, ADDRESS likha hua div dhoondhega
+            text(text) {
+              const clean = text.text.trim();
+              if(clean === 'NAME') currentKey = 'nam';
+              else if(clean === 'CNIC') currentKey = 'cni';
+              else if(clean === 'ADDRESS') currentKey = 'adr';
+            }
+          })
+          .on('div:matches(NAME|CNIC|ADDRESS) + div', { // Label ke agle div mein value hogi
+            text(text) {
+              if (currentKey && text.text.trim()) {
+                foundData[currentKey] = text.text.trim();
+                currentKey = ''; // Reset kar do
+              }
+            }
+          });
+
+        await rewriter.transform(new Response(text)).text();
+
+        // Agar humein data mil gaya, toh update kar do
+        if (foundData.nam) {
+          scrapedData.data[0] = { ...scrapedData.data[0], ...foundData };
+        }
 
         return new Response(JSON.stringify(scrapedData), {
           status: 200,
