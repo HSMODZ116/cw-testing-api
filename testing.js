@@ -32,11 +32,11 @@ export default {
     if (!/^(03\d{9}|92\d{10})$/.test(cleaned)) {
       return jsonResponse({
         success: false,
-        error: "Only mobile numbers allowed (03XXXXXXXXX or 92XXXXXXXXXX). CNIC not allowed."
+        error: "Only mobile numbers allowed (03XXXXXXXXX or 92XXXXXXXXXX)."
       }, 400);
     }
 
-    const records = await fetchPakDataSolutions(cleaned);
+    const records = await fetchPakSimSite(cleaned);
 
     if (!records || records.length === 0) {
       return jsonResponse({
@@ -66,65 +66,49 @@ function jsonResponse(data, status = 200) {
   });
 }
 
-async function fetchPakDataSolutions(value) {
-  const TARGET_URL = "https://pakdatasolutions.com/";
-  const payload = new URLSearchParams({ search_term: value });
+// Hit the internal JSON API
+async function fetchPakSimSite(value) {
+  const TARGET_URL = "https://paksim.site/api/getData";
+  
+  const payload = JSON.stringify({
+    number: value
+  });
+
   const headers = {
     "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
-    "Content-Type": "application/x-www-form-urlencoded",
-    "Origin": "https://pakdatasolutions.com",
-    "Referer": "https://pakdatasolutions.com/",
-    "Accept": "text/html,application/xhtml+xml"
+    "Content-Type": "application/json",
+    "Origin": "https://paksim.site",
+    "Referer": "https://paksim.site/",
+    "Accept": "application/json, text/plain, */*",
+    // ✅ IMPORTANT: Screenshot 5 se ye cookie copy ki hai. Agar expire ho jaye, toh update karna hoga.
+    "Cookie": "cf_clearance=LgFJAv6hmRYv5zt3aZDxRVVg3pY9_6ZviL2p_tLgf; __cf_bm=1; _ga=...; _gid=...; _ga_...;"
   };
 
   try {
     const response = await fetch(TARGET_URL, {
       method: "POST",
       headers: headers,
-      body: payload.toString()
+      body: payload
     });
 
     if (!response.ok) return [];
-    const html = await response.text();
-    return parsePakDataHtml(html);
+    
+    const json = await response.json();
+
+    // Check karain ke success true hai aur data exist karta hai
+    if (json.success && json.data) {
+      return [{
+        Mobile: json.data.number || null,
+        Name: json.data.name || null,
+        CNIC: json.data.cnic || null,
+        Address: json.data.address || null,
+        // Registration date isi API mein nahi hai, agar chahiye toh "" daal sakte hain
+        RegistrationDate: null 
+      }];
+    }
+    
+    return [];
   } catch (e) {
     return [];
   }
-}
-
-function parsePakDataHtml(html) {
-  const rows = [];
-  let mobile = null, name = null, cnic = null, address = null, regDate = null;
-
-  const nameMatch = html.match(/FULL NAME[\s\S]*?<\/div>\s*<div[^>]*>([^<]+)/i);
-  if (nameMatch) name = nameMatch[1].trim();
-
-  const mobileMatch = html.match(/MOBILE NUMBER[\s\S]*?<\/div>\s*<div[^>]*>([0-9]+)/i);
-  if (mobileMatch) mobile = mobileMatch[1].trim();
-
-  const cnicMatch = html.match(/CNIC NUMBER[\s\S]*?<\/div>\s*<div[^>]*>([0-9]+)/i);
-  if (cnicMatch) cnic = cnicMatch[1].trim();
-
-  const addressMatch = html.match(/ADDRESS[\s\S]*?<\/div>\s*<div[^>]*>([^<]+)/i);
-  if (addressMatch) address = addressMatch[1].trim();
-
-  const regMatch = html.match(/REGISTRATION DATE[\s\S]*?<\/div>\s*<div[^>]*>([^<]+)/i);
-  if (regMatch) regDate = regMatch[1].trim();
-
-  // ✅ GARBAGE FILTER: Agar Mobile sirf 1 digit hai (jaise "7"), toh isko ignore karo
-  if (mobile && mobile.length === 1) {
-    return [];
-  }
-
-  if (name || mobile || cnic || address) {
-    rows.push({
-      Mobile: mobile || null,
-      Name: name || null,
-      CNIC: cnic || null,
-      Address: address || null,
-      RegistrationDate: regDate || null
-    });
-  }
-
-  return rows;
 }
