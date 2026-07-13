@@ -24,15 +24,17 @@ export default {
     if (!query) {
       return jsonResponse({ 
         success: false, 
-        error: "Missing 'query' parameter. Use ?query=03001234567" 
+        error: "Missing 'query' parameter." 
       }, 400);
     }
 
     const cleaned = query.replace(/[^0-9]/g, '');
-    if (!/^(03\d{9}|92\d{10})$/.test(cleaned)) {
+
+    // ✅ CNIC & MOBILE BOTH ALLOWED (13 digits or 11/12 digits mobile)
+    if (!/^(\d{11}|\d{12}|\d{13})$/.test(cleaned)) {
       return jsonResponse({
         success: false,
-        error: "Only mobile numbers allowed (03XXXXXXXXX or 92XXXXXXXXXX)."
+        error: "Invalid format. Use 03XXXXXXXXX (11 digits) or 13-digit CNIC."
       }, 400);
     }
 
@@ -66,7 +68,6 @@ function jsonResponse(data, status = 200) {
   });
 }
 
-// Hit the internal JSON API
 async function fetchPakSimSite(value) {
   const TARGET_URL = "https://paksim.site/api/getData";
   
@@ -80,7 +81,6 @@ async function fetchPakSimSite(value) {
     "Origin": "https://paksim.site",
     "Referer": "https://paksim.site/",
     "Accept": "application/json, text/plain, */*",
-    // ✅ IMPORTANT: Screenshot 5 se ye cookie copy ki hai. Agar expire ho jaye, toh update karna hoga.
     "Cookie": "cf_clearance=LgFJAv6hmRYv5zt3aZDxRVVg3pY9_6ZviL2p_tLgf; __cf_bm=1; _ga=...; _gid=...; _ga_...;"
   };
 
@@ -92,21 +92,16 @@ async function fetchPakSimSite(value) {
     });
 
     if (!response.ok) return [];
-    
     const json = await response.json();
 
-    // Check karain ke success true hai aur data exist karta hai
     if (json.success && json.data) {
       return [{
         Mobile: json.data.number || null,
         Name: json.data.name || null,
         CNIC: json.data.cnic || null,
-        Address: json.data.address || null,
-        // Registration date isi API mein nahi hai, agar chahiye toh "" daal sakte hain
-        RegistrationDate: null 
+        Address: json.data.address || null
       }];
     }
-    
     return [];
   } catch (e) {
     return [];
