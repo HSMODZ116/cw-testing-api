@@ -111,6 +111,11 @@ function parsePakDataHtml(html) {
   const regMatch = html.match(/REGISTRATION DATE[\s\S]*?<\/div>\s*<div[^>]*>([^<]+)/i);
   if (regMatch) regDate = regMatch[1].trim();
 
+  // ✅ GARBAGE FILTER: Agar Mobile sirf 1 digit hai (jaise "7"), toh isko ignore karo
+  if (mobile && mobile.length === 1) {
+    return [];
+  }
+
   if (name || mobile || cnic || address) {
     rows.push({
       Mobile: mobile || null,
