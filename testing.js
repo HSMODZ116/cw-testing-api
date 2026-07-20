@@ -66,6 +66,7 @@ function jsonResponse(data, status = 200) {
 async function scrapeTelenorQuiz(dateQuery) {
   const TARGET_URL = `https://telenorquiztodays.pk/`;
   
+  // Cookies (From DevTools Screenshot)
   const cookies = [
     "_ga=GA1.1.2137942815.1784559948;",
     "_ga_5FRVYN66BF=GS2.1.1784559947.1.0.1784559956.0.0.0;",
@@ -89,7 +90,7 @@ async function scrapeTelenorQuiz(dateQuery) {
   const html = await response.text();
   const results = [];
 
-  // 1. Split into Question Blocks
+  // 1. Split HTML into 5 Question Blocks 
   const questionLabels = ['Question 1', 'Question 2', 'Question 3', 'Question 4', 'Question 5'];
   
   for (let i = 0; i < questionLabels.length; i++) {
@@ -99,71 +100,53 @@ async function scrapeTelenorQuiz(dateQuery) {
     let startIndex = html.indexOf(currentLabel);
     let endIndex = nextLabel ? html.indexOf(nextLabel, startIndex + 1) : html.length;
     
-    // Safety to cut off FAQs from Q5 block
-    if (i === 4) {
-        const faqsIndex = html.indexOf('FAQs', startIndex);
-        if (faqsIndex !== -1 && faqsIndex < endIndex) {
-            endIndex = faqsIndex;
-        }
+    // Safety: Cut off extra content like FAQs from Q5 block
+    const faqsIndex = html.indexOf('FAQs', startIndex);
+    if (faqsIndex !== -1 && faqsIndex < endIndex) {
+        endIndex = faqsIndex;
     }
 
     if (startIndex === -1) continue;
     
     let blockHtml = html.substring(startIndex, endIndex);
 
-    // 2. Extract Clean Question (Stop at Options)
+    // 2. Extract Clean Question (Remove Options from text)
     let question = `Question ${i+1}:`;
-    let qMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+)/i);
+    // Regex: "Question X:" ke baad ka text uthao jab tak '<br>' ya '<p>' ya options start na ho jayen
+    let qMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+)(?=<br|<p|<ul)/i);
     if (qMatch && qMatch[1]) {
         question = "Question " + (i+1) + ": " + qMatch[1].trim();
     }
 
-    // 3. EXACT GREEN BUTTON EXTRACTION (WITHOUT `-color`)
+    // 3. Extract Correct Answer (Target EXACT Green Button)
     let correctAnswer = "Answer not found";
 
-    // Step A: Dhoondho exact CSS (background: #24ff2a)
-    const greenStyleIndex = blockHtml.indexOf('background: #24ff2a');
+    // Step A: Search for exact inline style: background-color: #24ff2a
+    // Is line se woh label "Answer" ka block match nahi hoga, sirf Green Button ka block match hoga.
+    const greenStyleIndex = blockHtml.indexOf('background-color: #24ff2a');
     
     if (greenStyleIndex !== -1) {
-        // Step B: Style ke pehle wala 'class="' ka start index
-        const classStartIndex = blockHtml.lastIndexOf('class="', greenStyleIndex);
-        if (classStartIndex !== -1) {
-            // Step C: Us class ka closing tag '>'
-            const tagEndIndex = blockHtml.indexOf('>', classStartIndex);
-            if (tagEndIndex !== -1) {
-                // Step D: Text extract karo (> ke baad aur < se pehle)
-                const textStart = tagEndIndex + 1;
-                const textEnd = blockHtml.indexOf('<', textStart);
+        // Step B: Class start (>) ke baad ka text uthana
+        // '>' aur uske baad wale '<' ke beech ka text extract karna
+        const closeTagIndex = blockHtml.indexOf('>', greenStyleIndex);
+        if (closeTagIndex !== -1) {
+            const textStart = closeTagIndex + 1;
+            const textEnd = blockHtml.indexOf('<', textStart);
+            
+            if (textStart !== -1 && textEnd !== -1) {
+                let extracted = blockHtml.substring(textStart, textEnd).trim();
+                // Clean HTML entities & Tags
+                extracted = extracted.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
                 
-                if (textStart !== -1 && textEnd !== -1) {
-                    let extracted = blockHtml.substring(textStart, textEnd).trim();
-                    extracted = extracted.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
-                    
-                    // Step E: Agar extracted text "Answer" hai, toh usko skip karo aur next ka dhoondo
-                    if (extracted.toLowerCase() === 'answer') {
-                        // Q3, Q4, Q5 ke liye: Green button ke baad wala agla text uthao
-                        const afterBtnIndex = blockHtml.indexOf('">', textEnd);
-                        if (afterBtnIndex !== -1) {
-                            const nextTextStart = afterBtnIndex + 2; // after '">'
-                            const nextTextEnd = blockHtml.indexOf('<', nextTextStart);
-                            if (nextTextStart !== -1 && nextTextEnd !== -1) {
-                                let nextExtracted = blockHtml.substring(nextTextStart, nextTextEnd).trim();
-                                nextExtracted = nextExtracted.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
-                                if (nextExtracted.length > 0 && nextExtracted.length < 200) {
-                                    correctAnswer = nextExtracted;
-                                }
-                            }
-                        }
-                    } else if (extracted.length > 0 && extracted.length < 200) {
-                        // Q1, Q2, Q5 (jo direct text hai)
-                        correctAnswer = extracted;
-                    }
+                // Step C: Filter out "Answer" label
+                if (extracted.toLowerCase() !== 'answer' && extracted.length > 0 && extracted.length < 200) {
+                    correctAnswer = extracted;
                 }
             }
         }
     }
 
-    // 4. Final Cleanup
+    // 4. Final Cleanup (Remove extra spaces and quotes)
     question = question.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
     correctAnswer = correctAnswer.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
 
