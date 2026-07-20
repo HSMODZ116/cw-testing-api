@@ -89,15 +89,14 @@ async function scrapeTelenorQuiz(dateQuery) {
 
   const html = await response.text();
 
-  // ---------- SECTION-BASED PARSING (100% Accurate) ----------
+  // ---------- ULTRA-SPECIFIC PARSING (CSS & Meta Garbage Removed) ----------
   const results = [];
 
-  // 1. Split HTML into individual Question Blocks using the border style as a delimiter.
-  // The question blocks are wrapped in divs with a specific border style: border: 5px solid var(--global-palette1, #3182CE)
-  const blocks = html.split(/border-[a-z]*:\s*5px\s+solid\s+var\(--global-palette1,\s*#3182CE\)/gi);
+  // 1. Split the HTML into Question blocks using the 'kt-adv-heading' border style.
+  // The visible question blocks are wrapped in divs with a specific border: border-top: 5px solid var(--global-palette1, #3182CE)
+  const blocks = html.split(/border-top:\s*5px\s+solid\s+var\(--global-palette1,\s*#3182CE\)/gi);
   
   // blocks[0] is the header, blocks[1] to blocks[5] are the 5 question blocks.
-  // We iterate from 1 to 5 (or while blocks length is enough)
   for (let i = 1; i < blocks.length && i <= 5; i++) {
     const blockHtml = blocks[i];
     
@@ -108,18 +107,21 @@ async function scrapeTelenorQuiz(dateQuery) {
     const questionText = qMatch ? qMatch[1].trim() : `Question ${i} Not Found`;
 
     // 3. Extract Correct Answer (Green Button)
-    // Look specifically for the green button inside this specific block.
-    // The green button has class="kt-adv-heading..." and contains the answer.
-    const ansRegex = /class="[^"]*kt-adv-heading[^"]*"[^>]*>([^<]+)<\//i;
+    // Look specifically for the green button text inside this specific block.
+    // The green button has class="kt-adv-heading..." and contains the answer text.
+    // We look for the specific text pattern that is NOT CSS code.
+    const ansRegex = /class="[^"]*kt-adv-heading[^"]*"[^>]*>([A-Za-z0-9\s]+)<\//i;
     const ansMatch = blockHtml.match(ansRegex);
-    let correctAnswer = ansMatch ? ansMatch[1].trim() : "Answer not found";
-
-    // Clean up HTML entities
-    if (correctAnswer.includes('&nbsp;')) {
-      correctAnswer = correctAnswer.replace(/&nbsp;/g, ' ').trim();
-    }
-    if (questionText.includes('&nbsp;')) {
-      // Already handled by regex, but safety check
+    
+    let correctAnswer = "Answer not found";
+    if (ansMatch) {
+      // Filter out any CSS-like garbage
+      let rawAnswer = ansMatch[1].trim();
+      if (rawAnswer.includes('background-color')) {
+        // If we accidentally captured CSS, skip it
+      } else {
+        correctAnswer = rawAnswer;
+      }
     }
 
     results.push({
