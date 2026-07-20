@@ -87,9 +87,11 @@ async function scrapeTelenorQuiz(dateQuery) {
   }
 
   const html = await response.text();
+
   const results = [];
 
-  // 1. Extract all 5 question blocks perfectly
+  // 1. HTML ko 5 Question Blocks mein todna (Strictly separated by 'Question X:')
+  // IMPORTANT: 'FAQs' se pehle block ko rokna taake Q5 mein faqs na aaye
   const questionLabels = ['Question 1', 'Question 2', 'Question 3', 'Question 4', 'Question 5'];
   
   for (let i = 0; i < questionLabels.length; i++) {
@@ -99,48 +101,54 @@ async function scrapeTelenorQuiz(dateQuery) {
     let startIndex = html.indexOf(currentLabel);
     let endIndex = nextLabel ? html.indexOf(nextLabel, startIndex + 1) : html.length;
     
+    // AGAR block mein "FAQs" label aa gaya, toh usko wahan cut kar do
+    const faqsIndex = html.indexOf('FAQs', startIndex);
+    if (faqsIndex !== -1 && faqsIndex < endIndex) {
+        endIndex = faqsIndex;
+    }
+
     if (startIndex === -1) continue;
     
     let blockHtml = html.substring(startIndex, endIndex);
 
     // 2. Extract Clean Question
     let question = `Question ${i+1}:`;
-    // Keep only the text until we hit an HTML tag like <br> or <p>
     let questionTextMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+)/);
     if (questionTextMatch && questionTextMatch[1]) {
         question = "Question " + (i+1) + ": " + questionTextMatch[1].trim();
     }
 
-    // 3. FIX: EXACT STRATEGY FOR GREEN BUTTON
-    // Pehla "kt-adv-heading" = Label "Answer"
-    // Doosra "kt-adv-heading" (or Last) = Green Button ka exact text
+    // 3. Extract Correct Answer (Accurate Green Button Extraction)
     let correctAnswer = "Answer not found";
     
-    // Regex to find ALL instances of the class in this block
-    const allMatches = [...blockHtml.matchAll(/class="[^"]*kt-adv-heading[^"]*"[^>]*>([^<]*(?:<strong>([^<]+)<\/strong>)?[^<]*)</gi)];
-    
-    if (allMatches.length > 0) {
-        // HUMESHA LAST WALA MATCH LO (Wohi Green Button hoga)
-        const lastMatch = allMatches[allMatches.length - 1];
-        let ans = lastMatch[1].trim();
-        
-        // Agar <strong> ke andar hai, toh usko uthao (Q2 style)
-        if (lastMatch[2]) {
-            ans = lastMatch[2].trim();
-        }
-
-        // Cleanup
-        ans = ans.replace(/<[^>]*>|&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
-        
-        // Filter reject "Answer" label
-        if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
-            correctAnswer = ans;
+    // Step A: Label "Answer" wale class ko dhoondho aur reject karo
+    const labelIndex = blockHtml.indexOf('class="kt-adv-heading14_4cf857-70"');
+    if (labelIndex !== -1) {
+        // Step B: Label ke baad wala next "kt-adv-heading" class dhoondho (Green Button)
+        const nextHeadingIndex = blockHtml.indexOf('class="kt-adv-heading', labelIndex + 1);
+        if (nextHeadingIndex !== -1) {
+            // Step C: Us Green Button ke andar se text extract karo
+            // Isse <strong>, <p>, <div> sab handle ho jayenge
+            const textStart = blockHtml.indexOf('>', nextHeadingIndex) + 1;
+            const textEnd = blockHtml.indexOf('<', textStart);
+            
+            if (textStart !== -1 && textEnd !== -1) {
+                let ans = blockHtml.substring(textStart, textEnd).trim();
+                
+                // Clean & Validate
+                ans = ans.replace(/<[^>]*>/g, '').trim();
+                if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
+                    correctAnswer = ans;
+                }
+            }
         }
     }
 
-    // 4. Clean up Question text as well
-    question = question.replace(/<[^>]*>|&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
+    // 4. Clean up HTML entities
+    question = question.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
+    correctAnswer = correctAnswer.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
 
+    // Push to results
     results.push({
       question: question,
       correctAnswer: correctAnswer
