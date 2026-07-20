@@ -87,10 +87,9 @@ async function scrapeTelenorQuiz(dateQuery) {
   }
 
   const html = await response.text();
-
   const results = [];
 
-  // 1. Split into Question Blocks
+  // 1. Split into Question Blocks safely
   const questionLabels = ['Question 1', 'Question 2', 'Question 3', 'Question 4', 'Question 5'];
   
   for (let i = 0; i < questionLabels.length; i++) {
@@ -100,75 +99,54 @@ async function scrapeTelenorQuiz(dateQuery) {
     let startIndex = html.indexOf(currentLabel);
     let endIndex = nextLabel ? html.indexOf(nextLabel, startIndex + 1) : html.length;
     
-    // Agar block mein FAQs aajaye toh cut kar do
-    const faqsIndex = html.indexOf('FAQs', startIndex);
-    if (faqsIndex !== -1 && faqsIndex < endIndex) {
-        endIndex = faqsIndex;
-    }
-
     if (startIndex === -1) continue;
     
     let blockHtml = html.substring(startIndex, endIndex);
 
-    // 2. Extract Clean Question (Remove all Options)
+    // 2. Extract Clean Question
     let question = `Question ${i+1}:`;
     let qMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+)/i);
     if (qMatch && qMatch[1]) {
         question = "Question " + (i+1) + ": " + qMatch[1].trim();
     }
 
-    // 3. EXACT GREEN BUTTON STRATEGY (3 Layers)
+    // 3. THE ULTIMATE FIX (Slice and Extract)
     let correctAnswer = "Answer not found";
 
-    // LAYER 1: Class-based match (For Q1 and Q5 style)
-    // Search for class "kt-adv-heading" followed by "Answer" label, then take the next "kt-adv-heading"
-    const labelIndex = blockHtml.indexOf('class="kt-adv-heading14_4cf857-70"');
-    if (labelIndex !== -1) {
-        const btnIndex = blockHtml.indexOf('class="kt-adv-heading', labelIndex + 1);
-        if (btnIndex !== -1) {
-            const openTag = blockHtml.indexOf('>', btnIndex) + 1;
-            const closeTag = blockHtml.indexOf('<', openTag);
-            if (openTag !== -1 && closeTag !== -1) {
-                let raw = blockHtml.substring(openTag, closeTag).trim();
-                raw = raw.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
-                if(raw.toLowerCase() !== 'answer' && raw.length > 0 && raw.length < 100) {
-                    correctAnswer = raw;
+    // Step A: Find the Green Button (style contains #24ff2a) ka exact start index
+    const greenStyleIndex = blockHtml.indexOf('background:#24ff2a');
+    if (greenStyleIndex !== -1) {
+        // Step B: Pehle uss Green button ke pura HTML block ko dhoondho (class="kt-adv-heading" se lekar > tak)
+        // Class ka start dhoondho jo green style se pehle aata hai
+        const classStartIndex = blockHtml.lastIndexOf('class="', greenStyleIndex);
+        if (classStartIndex !== -1) {
+            // Uss class ka end index dhoondho (Tag close karta hai >)
+            const tagEndIndex = blockHtml.indexOf('>', classStartIndex);
+            if (tagEndIndex !== -1) {
+                
+                // Step C: Tag ke andar ka text extract karo (> ke baad aur < se pehle)
+                const textStart = tagEndIndex + 1;
+                const textEnd = blockHtml.indexOf('<', textStart);
+                
+                if (textStart !== -1 && textEnd !== -1) {
+                    // Step D: Raw Text nikalo
+                    let extracted = blockHtml.substring(textStart, textEnd).trim();
+                    
+                    // Step E: Clean karo HTML entities aur tags
+                    extracted = extracted.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
+                    
+                    // Step F: FILTER OUT THE "Answer" LABEL
+                    // Agar extracted text "Answer" hai, toh reject kar do. 
+                    // Jo bachega, woh Correct Answer hoga.
+                    if (extracted.toLowerCase() !== 'answer' && extracted.length > 0 && extracted.length < 200) {
+                        correctAnswer = extracted;
+                    }
                 }
             }
         }
     }
 
-    // LAYER 2: Strong Tag Extraction (For Q2 style)
-    if (correctAnswer === "Answer not found") {
-        const strongMatch = blockHtml.match(/<strong>([^<]+)<\/strong>/g);
-        if (strongMatch && strongMatch.length >= 2) {
-            // Because first <strong> is "Answer label", take the second one
-            let ans = strongMatch[1].replace(/<[^>]*>/g, '').trim();
-            if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
-                correctAnswer = ans;
-            }
-        } else if (strongMatch && strongMatch.length === 1) {
-            // Fallback if only one strong exists (Q3/4 fallback)
-            let ans = strongMatch[0].replace(/<[^>]*>/g, '').trim();
-            if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
-                correctAnswer = ans;
-            }
-        }
-    }
-
-    // LAYER 3: Green Background Text Extraction (For Q3 and Q4 style)
-    if (correctAnswer === "Answer not found") {
-        // Dhoondho Green color wala paragraph
-        const greenMatch = blockHtml.match(/style="[^"]*background(?:-color)?:\s*#24ff2a[^"]*"[^>]*>([^<]+)<\/p>/i);
-        if (greenMatch && greenMatch[1]) {
-            let ans = greenMatch[1].trim();
-            if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
-                correctAnswer = ans;
-            }
-        }
-    }
-
-    // 4. Cleanup HTML entities
+    // 4. Final Cleanup (Remove extra spaces)
     question = question.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
     correctAnswer = correctAnswer.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
 
