@@ -66,7 +66,7 @@ function jsonResponse(data, status = 200) {
 async function scrapeTelenorQuiz(dateQuery) {
   const TARGET_URL = `https://telenorquiztodays.pk/`;
   
-  // Cookies (From Screenshot for Cloudflare Bypass)
+  // Cookies (From Screenshot)
   const cookies = [
     "_ga=GA1.1.2137942815.1784559948;",
     "_ga_5FRVYN66BF=GS2.1.1784559947.1.0.1784559956.0.0.0;",
@@ -89,55 +89,60 @@ async function scrapeTelenorQuiz(dateQuery) {
 
   const html = await response.text();
 
-  // ---------- ACCURATE BLOCK-SPLITTING (Using Question Labels) ----------
+  // --- FIX: DOMParser ka use karna (Cloudflare Workers support karta hai) ---
+  const document = new DOMParser().parseFromString(html, 'text/html');
   const results = [];
 
-  // 1. Split the HTML into Question blocks using 'Question X:' label as delimiter
-  // This ensures each block contains exactly 1 question and its answer
-  const questionLabels = ['Question 1', 'Question 2', 'Question 3', 'Question 4', 'Question 5'];
-  
-  for (let i = 0; i < questionLabels.length; i++) {
-    const currentLabel = questionLabels[i];
-    const nextLabel = i < questionLabels.length - 1 ? questionLabels[i + 1] : null;
-    
-    // Extract the block between current question label and next question label (or end of string)
-    let startIndex = html.indexOf(currentLabel);
-    let endIndex = nextLabel ? html.indexOf(nextLabel, startIndex + 1) : html.length;
-    
-    // If label not found, skip
-    if (startIndex === -1) continue;
-    
-    const blockHtml = html.substring(startIndex, endIndex);
-    
-    // 2. Extract Question Text
-    // Inside the block, look for "Question X:" followed by text until a < or &nbsp;
-    const qRegex = /Question\s*\d+:\s*([^<]+)/i;
-    const qMatch = blockHtml.match(qRegex);
-    const questionText = qMatch ? qMatch[1].trim() : `Question ${i+1} Not Found`;
+  // Question blocks dhoondhna (sirf wohi select karna jisme green answer button hai)
+  // HTML mein 'kt-adv-heading14_b823be-d9' class sirf Answer button ke liye hai
+  const questionBlocks = document.querySelectorAll('.wp-block-kadence-rowlayout .kt-row-column-wrap');
 
-    // 3. Extract Correct Answer (Green Button)
-    // Look specifically for the green button text inside this specific block.
-    // The green button has class="kt-adv-heading..." and contains the answer text.
-    // We look for the specific text pattern that is NOT CSS code.
-    // The answer text is usually within <strong> tags inside the kt-adv-heading div.
-    const ansRegex = /<p[^>]*class="[^"]*kt-adv-heading[^"]*"[^>]*>[^<]*<strong>([^<]+)<\/strong><\/p>/i;
-    const ansMatch = blockHtml.match(ansRegex);
-    
+  let questionIndex = 0;
+
+  // Har block mein check karna
+  for (const block of questionBlocks) {
+    // Question text dhoondhna
+    const questionElement = block.querySelector('.wp-block-kadence-advancedheading');
+    if (!questionElement) continue;
+
+    let questionText = questionElement.textContent.trim();
+    if (!questionText.startsWith('Question')) continue; // Skip agar Question nahi hai
+
+    // Answer text dhoondhna (Green Button)
+    // Green button wale paragraph ki class pattern: kt-adv-heading14_b823be-d9
     let correctAnswer = "Answer not found";
-    if (ansMatch) {
-      let rawAnswer = ansMatch[1].trim();
-      // Remove any leftover HTML entities
-      rawAnswer = rawAnswer.replace(/&nbsp;/g, ' ').trim();
-      // Ignore if it's CSS-like code
-      if (rawAnswer.length > 0 && rawAnswer.length < 200) {
-        correctAnswer = rawAnswer;
-      }
+    
+    // Tareeqa 1: Green button ka <strong> text nikaalna
+    const greenBtn = block.querySelector('[class*="kt-adv-heading"][style*="background-color: #24ff2a"], [class*="kt-adv-heading"][style*="background: #24ff2a"]');
+    
+    if (greenBtn) {
+        const strongText = greenBtn.querySelector('strong');
+        if (strongText) {
+            correctAnswer = strongText.textContent.trim();
+        } else {
+            // Agar <strong> nahi hai to direct text le lo
+            correctAnswer = greenBtn.textContent.replace(/Answer/i, '').trim();
+        }
+    } else {
+        // Tareeqa 2: Agar color style CSS mein nahi mila, to generic class dhoondho
+        const possibleAnswers = block.querySelectorAll('.kt-adv-heading');
+        for (const el of possibleAnswers) {
+            const text = el.textContent.trim();
+            // Filter karna "Answer" label ko (jo Q1 mein issue kar raha tha)
+            if (text && text.length > 2 && text !== "Answer" && !text.includes("What does")) {
+                correctAnswer = text;
+                break;
+            }
+        }
     }
 
     results.push({
-      question: questionText,
-      correctAnswer: correctAnswer
+      question: questionText.replace(/&nbsp;/g, ' ').trim(),
+      correctAnswer: correctAnswer.replace(/&nbsp;/g, ' ').trim()
     });
+    
+    questionIndex++;
+    if (questionIndex >= 5) break; // Sirf 5 questions chahiye
   }
 
   return results;
