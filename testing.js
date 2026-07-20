@@ -66,7 +66,7 @@ function jsonResponse(data, status = 200) {
 async function scrapeTelenorQuiz(dateQuery) {
   const TARGET_URL = `https://telenorquiztodays.pk/`;
   
-  // Cookies (From Screenshot)
+  // Cookies (Screenshot se)
   const cookies = [
     "_ga=GA1.1.2137942815.1784559948;",
     "_ga_5FRVYN66BF=GS2.1.1784559947.1.0.1784559956.0.0.0;",
@@ -88,13 +88,9 @@ async function scrapeTelenorQuiz(dateQuery) {
   }
 
   const html = await response.text();
-
   const results = [];
 
-  // ---- FIX: Pure Regex Approach (No DOMParser) ----
-  
-  // 1. HTML ko Question blocks mein todna.
-  // Regex: "Question X:" se start karo, aur "Question Y:" (next) ya "Video Guide" tak khatam karo.
+  // 1. HTML ko Question blocks mein todna
   const blocks = html.match(/Question \d+?:[\s\S]*?(?=(Question \d+?:|Video Guide|$))/gi);
 
   if (!blocks) {
@@ -103,38 +99,39 @@ async function scrapeTelenorQuiz(dateQuery) {
 
   for (let i = 0; i < blocks.length; i++) {
     const block = blocks[i];
-    
-    // 2. Question text nikaalna (HTML tags hata kar)
-    let question = block.replace(/<[^>]*>/g, ' ') // Tags hatao
-                        .replace(/\s+/g, ' ')     // Extra spaces hatao
-                        .trim();
-    // Sirf first line (Question) rukne ke liye
-    question = question.split('\n')[0].trim();
 
-    // 3. CORRECT ANSWER extract karna (Green Button)
+    // 2. SIRF QUESTION extract karna (Options ko ignore karna)
+    // Regex `Question X:.*?<br` tak rukna hai (ke baad options start hote hain)
+    let questionMatch = block.match(/(Question \d+?:.*?)(?:<br\s*\/?>|<\/p>|<strong)/i);
+    let question = questionMatch ? questionMatch[1].trim() : `Question ${i+1} Not Found`;
+    
+    // HTML tags aur entities clean karna (Sirf text rakhna hai)
+    question = question.replace(/<[^>]*>/g, '').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;/g, '"').trim();
+
+    // 3. CORRECT ANSWER extract karna (Green button ka text)
     let correctAnswer = "Answer not found";
     
-    // Important: Green button ke andar <strong>Text</strong> hota hai.
-    // Hum regex mein "kt-adv-heading" class dhoondhenge aur uske andar ka <strong> text uthayenge.
-    // Pattern: class="...kt-adv-heading..." ke baad kuch bhi, phir <strong>TEXT</strong>
-    const answerMatch = block.match(/class="[^"]*kt-adv-heading[^"]*"[^>]*>[\s\S]*?<strong>([^<]+)<\/strong>/i);
+    // Green Button ke background color (hex #24ff2a) ka pattern match karna
+    // Class ".kt-adv-heading" aur style "background-color: #24ff2a" dhoondho
+    const greenBtnMatch = block.match(/class="[^"]*kt-adv-heading[^"]*"[^>]*style="[^"]*background(?:-color)?:\s*#24ff2a[^"]*"[^>]*>([^<]+)/i);
     
-    if (answerMatch && answerMatch[1]) {
-      correctAnswer = answerMatch[1].trim();
-    } 
-    // Fallback: Agar <strong> ke bina ho to direct text le lo
-    else {
-      const fallbackMatch = block.match(/class="[^"]*kt-adv-heading[^"]*"[^>]*>([^<]+)<\//i);
-      if (fallbackMatch && fallbackMatch[1]) {
-        let ans = fallbackMatch[1].trim();
-        if (ans !== "Answer" && ans.length > 2) {
-          correctAnswer = ans;
+    if (greenBtnMatch && greenBtnMatch[1]) {
+      let ans = greenBtnMatch[1].trim();
+      
+      // Agar text "Answer" hai to usko reject karo. Sirf correct answer lo.
+      if (ans.toLowerCase() !== "answer" && ans.length > 0 && ans.length < 100) {
+        correctAnswer = ans;
+      } else {
+        // Try extra extraction inside strong tags if answer extraction failed
+        const strongMatch = block.match(/class="[^"]*kt-adv-heading[^"]*"[^>]*style="[^"]*background(?:-color)?:\s*#24ff2a[^"]*"[^>]*>[\s\S]*?<strong>([^<]+)<\/strong>/i);
+        if (strongMatch && strongMatch[1] && strongMatch[1].toLowerCase() !== "answer") {
+             correctAnswer = strongMatch[1].trim();
         }
       }
     }
 
-    // HTML entities clean karna (e.g., &nbsp; and &#8220;)
-    correctAnswer = correctAnswer.replace(/&nbsp;/g, ' ').replace(/&#8220;|&#8221;|&ldquo;|&rdquo;/g, '"');
+    // Saaf kar dena HTML entities ko
+    correctAnswer = correctAnswer.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;/g, '"').trim();
 
     results.push({
       question: question,
