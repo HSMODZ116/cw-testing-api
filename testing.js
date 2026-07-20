@@ -93,39 +93,42 @@ async function scrapeTelenorQuiz(dateQuery) {
   const results = [];
 
   // 1. Split the HTML into Question blocks using 'Question X:' label as delimiter
+  // This ensures each block contains exactly 1 question and its answer
   const questionLabels = ['Question 1', 'Question 2', 'Question 3', 'Question 4', 'Question 5'];
   
   for (let i = 0; i < questionLabels.length; i++) {
     const currentLabel = questionLabels[i];
     const nextLabel = i < questionLabels.length - 1 ? questionLabels[i + 1] : null;
     
+    // Extract the block between current question label and next question label (or end of string)
     let startIndex = html.indexOf(currentLabel);
     let endIndex = nextLabel ? html.indexOf(nextLabel, startIndex + 1) : html.length;
     
+    // If label not found, skip
     if (startIndex === -1) continue;
     
     const blockHtml = html.substring(startIndex, endIndex);
     
     // 2. Extract Question Text
+    // Inside the block, look for "Question X:" followed by text until a < or &nbsp;
     const qRegex = /Question\s*\d+:\s*([^<]+)/i;
     const qMatch = blockHtml.match(qRegex);
     const questionText = qMatch ? qMatch[1].trim() : `Question ${i+1} Not Found`;
 
-    // 3. Extract Correct Answer (UPDATED GREEN BUTTON LOGIC)
-    // Look for the green box style 'background-color: #24ff2a' and extract the text immediately following it.
-    // This handles answers both WITH and WITHOUT <strong> tags.
+    // 3. Extract Correct Answer (Green Button)
+    // Look specifically for the green button text inside this specific block.
+    // The green button has class="kt-adv-heading..." and contains the answer text.
+    // We look for the specific text pattern that is NOT CSS code.
+    // The answer text is usually within <strong> tags inside the kt-adv-heading div.
+    const ansRegex = /<p[^>]*class="[^"]*kt-adv-heading[^"]*"[^>]*>[^<]*<strong>([^<]+)<\/strong><\/p>/i;
+    const ansMatch = blockHtml.match(ansRegex);
+    
     let correctAnswer = "Answer not found";
-    
-    // Use a general regex that captures everything inside the green box
-    const greenBoxRegex = /background-color:\s*#24ff2a[^>]*>([^<]+)<\//i;
-    const ansMatch = blockHtml.match(greenBoxRegex);
-    
-    if (ansMatch && ansMatch[1]) {
+    if (ansMatch) {
       let rawAnswer = ansMatch[1].trim();
-      // Clean up HTML entities
+      // Remove any leftover HTML entities
       rawAnswer = rawAnswer.replace(/&nbsp;/g, ' ').trim();
-      
-      // Ignore if it's CSS-like code or too short
+      // Ignore if it's CSS-like code
       if (rawAnswer.length > 0 && rawAnswer.length < 200) {
         correctAnswer = rawAnswer;
       }
