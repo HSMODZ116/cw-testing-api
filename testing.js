@@ -90,8 +90,7 @@ async function scrapeTelenorQuiz(dateQuery) {
 
   const results = [];
 
-  // 1. HTML ko 5 Question Blocks mein todna using 'Question X:' delimiters
-  // Is baar start aur end boundaries ko strict kar diya hai.
+  // 1. HTML ko 5 Question Blocks mein todna
   const questionLabels = ['Question 1', 'Question 2', 'Question 3', 'Question 4', 'Question 5'];
   
   for (let i = 0; i < questionLabels.length; i++) {
@@ -105,35 +104,46 @@ async function scrapeTelenorQuiz(dateQuery) {
     
     let blockHtml = html.substring(startIndex, endIndex);
 
-    // 2. Extract Question (Clean text from the start until we hit options)
-    // Ye regex "Question X:" se start karega aur uske baad jo text hai wo le lega
-    // jab tak ki koi HTML tag na aa jaye.
+    // 2. Extract Question
     let question = `Question ${i+1}:`;
     let questionTextMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+)/);
     if (questionTextMatch && questionTextMatch[1]) {
         question = "Question " + (i+1) + ": " + questionTextMatch[1].trim();
     }
 
-    // 3. Extract Correct Answer (Green Button ka text)
-    // Hum Regex use karenge specific classes dhoondhne ke bajaye.
-    // Green Button ka answer HTML mein is tarah hota hai: <p class="..."> <strong>ANSWER</strong> </p>
-    // Hum block mein search karenge <p class="kt-adv..."> <strong>...</strong>
+    // 3. Extract Correct Answer (Green Button ka text) - FIXED STRATEGY
+    // HTML me Green button layout kuch aisa hai: <p class="kt-adv..."> TEXT </p> ya <strong> TEXT </strong>
     let correctAnswer = "Answer not found";
     
-    // Simplified Matching: Class containing kt-adv-heading, then find <strong> tag inside it.
-    // We also add a restriction: The text inside <strong> must NOT be exactly "Answer"
-    const simpleAnswerMatch = blockHtml.match(/class="[^"]*kt-adv-heading[^"]*"[^>]*>[\s\S]*?<strong>([^<]+)<\/strong>/i);
+    // Strategy 1: Pehle dhoondho <p class="...kt-adv-heading..."> ke andar koi bhi text
+    // "> ke baad text aata hai jab tak < na aa jaye
+    // (?:<strong>)?(.*?)(?:<\/strong>)? -> Ye optional strong tags ko handle karta hai
+    const paragraphMatch = blockHtml.match(/class="[^"]*kt-adv-heading[^"]*"[^>]*>[\s\S]*?(?:<strong>)?(.*?)(?:<\/strong>)?(?=\s*<\/p>|<br)/i);
     
-    if (simpleAnswerMatch && simpleAnswerMatch[1]) {
-        let ans = simpleAnswerMatch[1].trim();
+    if (paragraphMatch && paragraphMatch[1]) {
+        let ans = paragraphMatch[1].trim();
+        // Ignore karain agar answer "Answer" hai, kyunke q1, q3 me label "Answer" bhi hai
         if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
             correctAnswer = ans;
         }
     }
 
-    // 4. Clean up HTML entities
-    question = question.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;/g, '"').trim();
-    correctAnswer = correctAnswer.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;/g, '"').trim();
+    // Strategy 2: Agar upar se kuch nahi mila, to <strong> dhoondho (fallback for Q2)
+    if(correctAnswer === "Answer not found") {
+      const strongMatch = blockHtml.match(/<strong>([^<]+)<\/strong>/i);
+      if (strongMatch && strongMatch[1]) {
+          let ans = strongMatch[1].trim();
+          if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
+              correctAnswer = ans;
+          }
+      }
+    }
+
+    // 4. Clean up HTML entities (yeh saare &nbsp; aur quote mark hata dega)
+    // Pehle question ko clear karo
+    question = question.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
+    // Phir answer ko clear karo
+    correctAnswer = correctAnswer.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
 
     results.push({
       question: question,
