@@ -90,7 +90,7 @@ async function scrapeTelenorQuiz(dateQuery) {
 
   const results = [];
 
-  // 1. Split into Question Blocks safely
+  // 1. Split HTML into Question Blocks
   const questionLabels = ['Question 1', 'Question 2', 'Question 3', 'Question 4', 'Question 5'];
   
   for (let i = 0; i < questionLabels.length; i++) {
@@ -104,27 +104,26 @@ async function scrapeTelenorQuiz(dateQuery) {
     
     let blockHtml = html.substring(startIndex, endIndex);
 
-    // 2. Extract Clean Question
+    // 2. Extract Clean Question (Remove Options)
     let question = `Question ${i+1}:`;
     let qMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+)/i);
     if (qMatch && qMatch[1]) {
         question = "Question " + (i+1) + ": " + qMatch[1].trim();
     }
 
-    // 3. THE ULTIMATE FIX (Exact Match of Green Background)
+    // 3. EXACT GREEN BUTTON EXTRACTION (FINAL FIX)
     let correctAnswer = "Answer not found";
 
-    // Step A: Dhoondho exact 'background-color: #24ff2a'
+    // Step A: Dhoondho Green button ka exact style
     const greenStyleIndex = blockHtml.indexOf('background-color: #24ff2a');
     
     if (greenStyleIndex !== -1) {
-        // Step B: Us style se pehle wala 'class="' ka start index dhoondho
+        // Step B: Style se pehle wala 'class="' ka start index dhoondho
         const classStartIndex = blockHtml.lastIndexOf('class="', greenStyleIndex);
         if (classStartIndex !== -1) {
             // Step C: Us class ka closing tag '>' dhoondho
             const tagEndIndex = blockHtml.indexOf('>', classStartIndex);
             if (tagEndIndex !== -1) {
-                
                 // Step D: Text extract karo (> ke baad aur < se pehle)
                 const textStart = tagEndIndex + 1;
                 const textEnd = blockHtml.indexOf('<', textStart);
@@ -145,7 +144,7 @@ async function scrapeTelenorQuiz(dateQuery) {
         }
     }
 
-    // 4. Final Cleanup
+    // 4. Final Cleanup (Remove extra spaces and HTML entities)
     question = question.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
     correctAnswer = correctAnswer.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
 
