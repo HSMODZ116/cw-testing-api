@@ -89,7 +89,7 @@ async function scrapeTelenorQuiz(dateQuery) {
   const html = await response.text();
   const results = [];
 
-  // 1. Split into Question Blocks
+  // 1. Split into Question Blocks safely
   const questionLabels = ['Question 1', 'Question 2', 'Question 3', 'Question 4', 'Question 5'];
   
   for (let i = 0; i < questionLabels.length; i++) {
@@ -110,31 +110,37 @@ async function scrapeTelenorQuiz(dateQuery) {
         question = "Question " + (i+1) + ": " + qMatch[1].trim();
     }
 
-    // 3. FIX: Target ONLY the Green Button (Ignore Options)
+    // 3. NEW LOGIC: Target ONLY the element with Green Background
     let correctAnswer = "Answer not found";
 
-    // Step A: Find the "Answer" Label class
-    const labelIndex = blockHtml.indexOf('class="kt-adv-heading14_4cf857-70"');
-    if (labelIndex !== -1) {
-        // Step B: Find the NEXT "kt-adv-heading" class (The Green Button)
-        const btnIndex = blockHtml.indexOf('class="kt-adv-heading', labelIndex + 1);
-        if (btnIndex !== -1) {
-            // Step C: Extract text safely from the button
-            const openTagEnd = blockHtml.indexOf('>', btnIndex) + 1;
-            const closeTagStart = blockHtml.indexOf('<', openTagEnd);
-            
-            if (openTagEnd !== -1 && closeTagStart !== -1) {
-                let rawAns = blockHtml.substring(openTagEnd, closeTagStart).trim();
-                rawAns = rawAns.replace(/<[^>]*>|&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
+    // Step A: Dhoondho exact green color (#24ff2a) wala style
+    const greenStyleMatch = blockHtml.match(/style="[^"]*background(?:-color)?:\s*#24ff2a[^"]*"/i);
+    
+    if (greenStyleMatch) {
+        // Step B: Uss style ke baad ka HTML text uthao jab tak < na aa jaye
+        const styleEndIndex = blockHtml.indexOf('"', blockHtml.indexOf(greenStyleMatch[0]) + greenStyleMatch[0].length);
+        if (styleEndIndex !== -1) {
+            // Ab hum uss element ke close ('>') ke baad ka text dhoondhenge
+            const closeTagIndex = blockHtml.indexOf('>', styleEndIndex);
+            if (closeTagIndex !== -1) {
+                // Text start karega closeTag ke baad se
+                let textStart = closeTagIndex + 1;
+                let textEnd = blockHtml.indexOf('<', textStart);
                 
-                if(rawAns.toLowerCase() !== 'answer' && rawAns.length > 0 && rawAns.length < 100) {
-                    correctAnswer = rawAns;
+                if (textEnd !== -1) {
+                    let rawAns = blockHtml.substring(textStart, textEnd).trim();
+                    // Saaf karo HTML tags aur entities
+                    rawAns = rawAns.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
+                    
+                    if(rawAns.length > 0 && rawAns.length < 200) {
+                        correctAnswer = rawAns;
+                    }
                 }
             }
         }
     }
 
-    // Fallback for Q2 (If <strong> exists)
+    // Fallback: Agar Green color nahi mila (e.g., Q2 style me strong tag hai)
     if (correctAnswer === "Answer not found") {
         const strongMatch = blockHtml.match(/<strong>([^<]+)<\/strong>/i);
         if (strongMatch && strongMatch[1]) {
