@@ -89,60 +89,57 @@ async function scrapeTelenorQuiz(dateQuery) {
 
   const html = await response.text();
 
-  // --- FIX: DOMParser ka use karna (Cloudflare Workers support karta hai) ---
-  const document = new DOMParser().parseFromString(html, 'text/html');
   const results = [];
 
-  // Question blocks dhoondhna (sirf wohi select karna jisme green answer button hai)
-  // HTML mein 'kt-adv-heading14_b823be-d9' class sirf Answer button ke liye hai
-  const questionBlocks = document.querySelectorAll('.wp-block-kadence-rowlayout .kt-row-column-wrap');
+  // ---- FIX: Pure Regex Approach (No DOMParser) ----
+  
+  // 1. HTML ko Question blocks mein todna.
+  // Regex: "Question X:" se start karo, aur "Question Y:" (next) ya "Video Guide" tak khatam karo.
+  const blocks = html.match(/Question \d+?:[\s\S]*?(?=(Question \d+?:|Video Guide|$))/gi);
 
-  let questionIndex = 0;
+  if (!blocks) {
+    return results;
+  }
 
-  // Har block mein check karna
-  for (const block of questionBlocks) {
-    // Question text dhoondhna
-    const questionElement = block.querySelector('.wp-block-kadence-advancedheading');
-    if (!questionElement) continue;
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    
+    // 2. Question text nikaalna (HTML tags hata kar)
+    let question = block.replace(/<[^>]*>/g, ' ') // Tags hatao
+                        .replace(/\s+/g, ' ')     // Extra spaces hatao
+                        .trim();
+    // Sirf first line (Question) rukne ke liye
+    question = question.split('\n')[0].trim();
 
-    let questionText = questionElement.textContent.trim();
-    if (!questionText.startsWith('Question')) continue; // Skip agar Question nahi hai
-
-    // Answer text dhoondhna (Green Button)
-    // Green button wale paragraph ki class pattern: kt-adv-heading14_b823be-d9
+    // 3. CORRECT ANSWER extract karna (Green Button)
     let correctAnswer = "Answer not found";
     
-    // Tareeqa 1: Green button ka <strong> text nikaalna
-    const greenBtn = block.querySelector('[class*="kt-adv-heading"][style*="background-color: #24ff2a"], [class*="kt-adv-heading"][style*="background: #24ff2a"]');
+    // Important: Green button ke andar <strong>Text</strong> hota hai.
+    // Hum regex mein "kt-adv-heading" class dhoondhenge aur uske andar ka <strong> text uthayenge.
+    // Pattern: class="...kt-adv-heading..." ke baad kuch bhi, phir <strong>TEXT</strong>
+    const answerMatch = block.match(/class="[^"]*kt-adv-heading[^"]*"[^>]*>[\s\S]*?<strong>([^<]+)<\/strong>/i);
     
-    if (greenBtn) {
-        const strongText = greenBtn.querySelector('strong');
-        if (strongText) {
-            correctAnswer = strongText.textContent.trim();
-        } else {
-            // Agar <strong> nahi hai to direct text le lo
-            correctAnswer = greenBtn.textContent.replace(/Answer/i, '').trim();
+    if (answerMatch && answerMatch[1]) {
+      correctAnswer = answerMatch[1].trim();
+    } 
+    // Fallback: Agar <strong> ke bina ho to direct text le lo
+    else {
+      const fallbackMatch = block.match(/class="[^"]*kt-adv-heading[^"]*"[^>]*>([^<]+)<\//i);
+      if (fallbackMatch && fallbackMatch[1]) {
+        let ans = fallbackMatch[1].trim();
+        if (ans !== "Answer" && ans.length > 2) {
+          correctAnswer = ans;
         }
-    } else {
-        // Tareeqa 2: Agar color style CSS mein nahi mila, to generic class dhoondho
-        const possibleAnswers = block.querySelectorAll('.kt-adv-heading');
-        for (const el of possibleAnswers) {
-            const text = el.textContent.trim();
-            // Filter karna "Answer" label ko (jo Q1 mein issue kar raha tha)
-            if (text && text.length > 2 && text !== "Answer" && !text.includes("What does")) {
-                correctAnswer = text;
-                break;
-            }
-        }
+      }
     }
 
+    // HTML entities clean karna (e.g., &nbsp; and &#8220;)
+    correctAnswer = correctAnswer.replace(/&nbsp;/g, ' ').replace(/&#8220;|&#8221;|&ldquo;|&rdquo;/g, '"');
+
     results.push({
-      question: questionText.replace(/&nbsp;/g, ' ').trim(),
-      correctAnswer: correctAnswer.replace(/&nbsp;/g, ' ').trim()
+      question: question,
+      correctAnswer: correctAnswer
     });
-    
-    questionIndex++;
-    if (questionIndex >= 5) break; // Sirf 5 questions chahiye
   }
 
   return results;
