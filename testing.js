@@ -89,7 +89,7 @@ async function scrapeTelenorQuiz(dateQuery) {
   const html = await response.text();
   const results = [];
 
-  // 1. HTML ko 5 Question Blocks mein todna
+  // 1. Split into Question Blocks
   const questionLabels = ['Question 1', 'Question 2', 'Question 3', 'Question 4', 'Question 5'];
   
   for (let i = 0; i < questionLabels.length; i++) {
@@ -103,41 +103,38 @@ async function scrapeTelenorQuiz(dateQuery) {
     
     let blockHtml = html.substring(startIndex, endIndex);
 
-    // 2. Extract Clean Question (Remove all Options)
+    // 2. Extract Clean Question
     let question = `Question ${i+1}:`;
     let qMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+)/i);
     if (qMatch && qMatch[1]) {
         question = "Question " + (i+1) + ": " + qMatch[1].trim();
     }
 
-    // 3. Extract Correct Answer Logic (100% Guaranteed)
+    // 3. FIX: Target ONLY the Green Button (Ignore Options)
     let correctAnswer = "Answer not found";
 
-    // Step A: Doosre "kt-adv-heading" class ko dhoondho (jo answer ke green button ki hai)
-    // Pehli "kt-adv-heading" label "Answer" ki hai, doosri answer button ki.
-    const firstIndex = blockHtml.indexOf('class="kt-adv-heading');
-    if (firstIndex !== -1) {
-        const secondIndex = blockHtml.indexOf('class="kt-adv-heading', firstIndex + 1);
-        if (secondIndex !== -1) {
-            // Step B: Button ke andar se exact text nikaal lo
-            const afterClass = blockHtml.indexOf('>', secondIndex) + 1;
-            const beforeClose = blockHtml.indexOf('<', afterClass);
+    // Step A: Find the "Answer" Label class
+    const labelIndex = blockHtml.indexOf('class="kt-adv-heading14_4cf857-70"');
+    if (labelIndex !== -1) {
+        // Step B: Find the NEXT "kt-adv-heading" class (The Green Button)
+        const btnIndex = blockHtml.indexOf('class="kt-adv-heading', labelIndex + 1);
+        if (btnIndex !== -1) {
+            // Step C: Extract text safely from the button
+            const openTagEnd = blockHtml.indexOf('>', btnIndex) + 1;
+            const closeTagStart = blockHtml.indexOf('<', openTagEnd);
             
-            if (afterClass !== -1 && beforeClose !== -1) {
-                let rawAnswer = blockHtml.substring(afterClass, beforeClose).trim();
+            if (openTagEnd !== -1 && closeTagStart !== -1) {
+                let rawAns = blockHtml.substring(openTagEnd, closeTagStart).trim();
+                rawAns = rawAns.replace(/<[^>]*>|&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
                 
-                // Saaf karo extra tags aur &nbsp; (jese <strong>Answer</strong> agar aaya to bhi saaf ho jayega)
-                rawAnswer = rawAnswer.replace(/<[^>]*>|&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
-                
-                // Agar Answer not found aur length 100 se kam hai to accept karo
-                if(rawAnswer.toLowerCase() !== 'answer' && rawAnswer.length > 0 && rawAnswer.length < 100) {
-                    correctAnswer = rawAnswer;
+                if(rawAns.toLowerCase() !== 'answer' && rawAns.length > 0 && rawAns.length < 100) {
+                    correctAnswer = rawAns;
                 }
             }
         }
     }
 
-    // Fallback: Directly "Answer" label ke baad wala strong tag uthao (Q2 style)
+    // Fallback for Q2 (If <strong> exists)
     if (correctAnswer === "Answer not found") {
         const strongMatch = blockHtml.match(/<strong>([^<]+)<\/strong>/i);
         if (strongMatch && strongMatch[1]) {
@@ -148,7 +145,7 @@ async function scrapeTelenorQuiz(dateQuery) {
         }
     }
 
-    // 4. Final Cleanup (HTML entities)
+    // 4. Cleanup HTML entities
     question = question.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
     correctAnswer = correctAnswer.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
 
