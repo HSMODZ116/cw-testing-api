@@ -112,33 +112,40 @@ async function scrapeTelenorQuiz(dateQuery) {
 
     // 2. Extract Clean Question (Remove Options from text)
     let question = `Question ${i+1}:`;
-    // Regex: "Question X:" ke baad ka text uthao jab tak '<br>' ya '<p>' ya options start na ho jayen
-    let qMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+)(?=<br|<p|<ul)/i);
+    // FIX: Question ke baad jo options hai, unko hatane ke liye sabse pehla <br> ya <p> ya <strong> dhoondho
+    let qMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+)(?=\s*<br\s*\/?>|\s*<p|\s*<strong)/i);
     if (qMatch && qMatch[1]) {
         question = "Question " + (i+1) + ": " + qMatch[1].trim();
+    } else {
+        // Fallback agar regex fail ho jaye
+        const simpleMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+)/i);
+        if (simpleMatch) {
+            question = "Question " + (i+1) + ": " + simpleMatch[1].trim();
+        }
     }
 
-    // 3. Extract Correct Answer (Target EXACT Green Button)
+    // 3. Extract Correct Answer (Target EXACT Green Button ID)
     let correctAnswer = "Answer not found";
 
-    // Step A: Search for exact inline style: background-color: #24ff2a
-    // Is line se woh label "Answer" ka block match nahi hoga, sirf Green Button ka block match hoga.
-    const greenStyleIndex = blockHtml.indexOf('background-color: #24ff2a');
+    // Step A: Search for the exact Green Button Class ID found in your HTML file
+    // HTML me Green Button ka class exactly yeh hai: "kt-adv-heading14_b823be-d9"
+    const greenBtnIndex = blockHtml.indexOf('class="kt-adv-heading14_b823be-d9"');
     
-    if (greenStyleIndex !== -1) {
+    if (greenBtnIndex !== -1) {
         // Step B: Class start (>) ke baad ka text uthana
         // '>' aur uske baad wale '<' ke beech ka text extract karna
-        const closeTagIndex = blockHtml.indexOf('>', greenStyleIndex);
+        const closeTagIndex = blockHtml.indexOf('>', greenBtnIndex);
         if (closeTagIndex !== -1) {
             const textStart = closeTagIndex + 1;
             const textEnd = blockHtml.indexOf('<', textStart);
             
             if (textStart !== -1 && textEnd !== -1) {
                 let extracted = blockHtml.substring(textStart, textEnd).trim();
-                // Clean HTML entities & Tags
+                
+                // Clean HTML entities & Tags (Remove <strong> if it exists inside)
                 extracted = extracted.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
                 
-                // Step C: Filter out "Answer" label
+                // Step C: Filter out "Answer" label (Only if it's not the correct answer)
                 if (extracted.toLowerCase() !== 'answer' && extracted.length > 0 && extracted.length < 200) {
                     correctAnswer = extracted;
                 }
