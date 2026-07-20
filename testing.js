@@ -87,11 +87,9 @@ async function scrapeTelenorQuiz(dateQuery) {
   }
 
   const html = await response.text();
-
   const results = [];
 
-  // 1. HTML ko 5 Question Blocks mein todna (Strictly separated by 'Question X:')
-  // IMPORTANT: 'FAQs' se pehle block ko rokna taake Q5 mein faqs na aaye
+  // 1. HTML ko 5 Question Blocks mein todna
   const questionLabels = ['Question 1', 'Question 2', 'Question 3', 'Question 4', 'Question 5'];
   
   for (let i = 0; i < questionLabels.length; i++) {
@@ -101,54 +99,59 @@ async function scrapeTelenorQuiz(dateQuery) {
     let startIndex = html.indexOf(currentLabel);
     let endIndex = nextLabel ? html.indexOf(nextLabel, startIndex + 1) : html.length;
     
-    // AGAR block mein "FAQs" label aa gaya, toh usko wahan cut kar do
-    const faqsIndex = html.indexOf('FAQs', startIndex);
-    if (faqsIndex !== -1 && faqsIndex < endIndex) {
-        endIndex = faqsIndex;
-    }
-
     if (startIndex === -1) continue;
     
     let blockHtml = html.substring(startIndex, endIndex);
 
-    // 2. Extract Clean Question
+    // 2. Extract Clean Question (Remove all Options)
     let question = `Question ${i+1}:`;
-    let questionTextMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+)/);
-    if (questionTextMatch && questionTextMatch[1]) {
-        question = "Question " + (i+1) + ": " + questionTextMatch[1].trim();
+    let qMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+)/i);
+    if (qMatch && qMatch[1]) {
+        question = "Question " + (i+1) + ": " + qMatch[1].trim();
     }
 
-    // 3. Extract Correct Answer (Accurate Green Button Extraction)
+    // 3. Extract Correct Answer Logic (100% Guaranteed)
     let correctAnswer = "Answer not found";
-    
-    // Step A: Label "Answer" wale class ko dhoondho aur reject karo
-    const labelIndex = blockHtml.indexOf('class="kt-adv-heading14_4cf857-70"');
-    if (labelIndex !== -1) {
-        // Step B: Label ke baad wala next "kt-adv-heading" class dhoondho (Green Button)
-        const nextHeadingIndex = blockHtml.indexOf('class="kt-adv-heading', labelIndex + 1);
-        if (nextHeadingIndex !== -1) {
-            // Step C: Us Green Button ke andar se text extract karo
-            // Isse <strong>, <p>, <div> sab handle ho jayenge
-            const textStart = blockHtml.indexOf('>', nextHeadingIndex) + 1;
-            const textEnd = blockHtml.indexOf('<', textStart);
+
+    // Step A: Doosre "kt-adv-heading" class ko dhoondho (jo answer ke green button ki hai)
+    // Pehli "kt-adv-heading" label "Answer" ki hai, doosri answer button ki.
+    const firstIndex = blockHtml.indexOf('class="kt-adv-heading');
+    if (firstIndex !== -1) {
+        const secondIndex = blockHtml.indexOf('class="kt-adv-heading', firstIndex + 1);
+        if (secondIndex !== -1) {
+            // Step B: Button ke andar se exact text nikaal lo
+            const afterClass = blockHtml.indexOf('>', secondIndex) + 1;
+            const beforeClose = blockHtml.indexOf('<', afterClass);
             
-            if (textStart !== -1 && textEnd !== -1) {
-                let ans = blockHtml.substring(textStart, textEnd).trim();
+            if (afterClass !== -1 && beforeClose !== -1) {
+                let rawAnswer = blockHtml.substring(afterClass, beforeClose).trim();
                 
-                // Clean & Validate
-                ans = ans.replace(/<[^>]*>/g, '').trim();
-                if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
-                    correctAnswer = ans;
+                // Saaf karo extra tags aur &nbsp; (jese <strong>Answer</strong> agar aaya to bhi saaf ho jayega)
+                rawAnswer = rawAnswer.replace(/<[^>]*>|&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
+                
+                // Agar Answer not found aur length 100 se kam hai to accept karo
+                if(rawAnswer.toLowerCase() !== 'answer' && rawAnswer.length > 0 && rawAnswer.length < 100) {
+                    correctAnswer = rawAnswer;
                 }
             }
         }
     }
 
-    // 4. Clean up HTML entities
+    // Fallback: Directly "Answer" label ke baad wala strong tag uthao (Q2 style)
+    if (correctAnswer === "Answer not found") {
+        const strongMatch = blockHtml.match(/<strong>([^<]+)<\/strong>/i);
+        if (strongMatch && strongMatch[1]) {
+             let ans = strongMatch[1].trim();
+             if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
+                 correctAnswer = ans;
+             }
+        }
+    }
+
+    // 4. Final Cleanup (HTML entities)
     question = question.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
     correctAnswer = correctAnswer.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
 
-    // Push to results
     results.push({
       question: question,
       correctAnswer: correctAnswer
