@@ -66,6 +66,7 @@ function jsonResponse(data, status = 200) {
 async function scrapeTelenorQuiz(dateQuery) {
   const TARGET_URL = `https://telenorquiztodays.pk/`;
   
+  // Cookies (From Screenshot)
   const cookies = [
     "_ga=GA1.1.2137942815.1784559948;",
     "_ga_5FRVYN66BF=GS2.1.1784559947.1.0.1784559956.0.0.0;",
@@ -90,82 +91,50 @@ async function scrapeTelenorQuiz(dateQuery) {
 
   const results = [];
 
-  // 1. HTML ko 5 Question Blocks mein todna
-  const questionLabels = ['Question 1', 'Question 2', 'Question 3', 'Question 4', 'Question 5'];
+  // ---- FIX: Pure Regex Approach (No DOMParser) ----
   
-  for (let i = 0; i < questionLabels.length; i++) {
-    const currentLabel = questionLabels[i];
-    const nextLabel = i < questionLabels.length - 1 ? questionLabels[i + 1] : null;
-    
-    let startIndex = html.indexOf(currentLabel);
-    let endIndex = nextLabel ? html.indexOf(nextLabel, startIndex + 1) : html.length;
-    
-    // Safety: Cut off extra content like FAQs from Q5 block
-    const faqsIndex = html.indexOf('FAQs', startIndex);
-    if (faqsIndex !== -1 && faqsIndex < endIndex) {
-        endIndex = faqsIndex;
-    }
+  // 1. HTML ko Question blocks mein todna.
+  // Regex: "Question X:" se start karo, aur "Question Y:" (next) ya "Video Guide" tak khatam karo.
+  const blocks = html.match(/Question \d+?:[\s\S]*?(?=(Question \d+?:|Video Guide|$))/gi);
 
-    if (startIndex === -1) continue;
+  if (!blocks) {
+    return results;
+  }
+
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
     
-    let blockHtml = html.substring(startIndex, endIndex);
+    // 2. Question text nikaalna (HTML tags hata kar)
+    let question = block.replace(/<[^>]*>/g, ' ') // Tags hatao
+                        .replace(/\s+/g, ' ')     // Extra spaces hatao
+                        .trim();
+    // Sirf first line (Question) rukne ke liye
+    question = question.split('\n')[0].trim();
 
-    // 2. Extract Question
-    let question = `Question ${i+1}:`;
-    // Regex: "Question X:" ke baad ka text uthao jab tak options start na ho jayen
-    let questionTextMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+?)(?=\s*<br\s*\/?>|\s*<p|\s*<ul|\s*<strong)/i);
-    if (questionTextMatch && questionTextMatch[1]) {
-        question = "Question " + (i+1) + ": " + questionTextMatch[1].trim();
-    }
-
-    // 3. Extract Correct Answer (Green Button ka text) - PERFECT STRATEGY
+    // 3. CORRECT ANSWER extract karna (Green Button)
     let correctAnswer = "Answer not found";
-
-    // Step A: Search for the EXACT Green Button Class ID (Q3, Q4, Q5 ki class)
-    const greenBtnIndex = blockHtml.indexOf('class="kt-adv-heading14_b823be-d9"');
-    if (greenBtnIndex !== -1) {
-        const closeTagIndex = blockHtml.indexOf('>', greenBtnIndex);
-        if (closeTagIndex !== -1) {
-            const contentStart = closeTagIndex + 1;
-            const contentEnd = blockHtml.indexOf('<', contentStart);
-            
-            if (contentStart !== -1 && contentEnd !== -1) {
-                let extractedHtml = blockHtml.substring(contentStart, contentEnd).trim();
-                let extracted = extractedHtml.replace(/<[^>]*>/g, ' ').trim();
-                extracted = extracted.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
-                
-                if (extracted.toLowerCase() !== 'answer' && extracted.length > 0 && extracted.length < 200) {
-                    correctAnswer = extracted;
-                }
-            }
+    
+    // Important: Green button ke andar <strong>Text</strong> hota hai.
+    // Hum regex mein "kt-adv-heading" class dhoondhenge aur uske andar ka <strong> text uthayenge.
+    // Pattern: class="...kt-adv-heading..." ke baad kuch bhi, phir <strong>TEXT</strong>
+    const answerMatch = block.match(/class="[^"]*kt-adv-heading[^"]*"[^>]*>[\s\S]*?<strong>([^<]+)<\/strong>/i);
+    
+    if (answerMatch && answerMatch[1]) {
+      correctAnswer = answerMatch[1].trim();
+    } 
+    // Fallback: Agar <strong> ke bina ho to direct text le lo
+    else {
+      const fallbackMatch = block.match(/class="[^"]*kt-adv-heading[^"]*"[^>]*>([^<]+)<\//i);
+      if (fallbackMatch && fallbackMatch[1]) {
+        let ans = fallbackMatch[1].trim();
+        if (ans !== "Answer" && ans.length > 2) {
+          correctAnswer = ans;
         }
+      }
     }
 
-    // Step B: If Step A fails, try finding <strong> (Q1, Q2 style)
-    if (correctAnswer === "Answer not found") {
-        const strongMatch = blockHtml.match(/<strong>([^<]+)<\/strong>/i);
-        if (strongMatch && strongMatch[1]) {
-            let ans = strongMatch[1].trim();
-            if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
-                correctAnswer = ans;
-            }
-        }
-    }
-
-    // Step C: If both fail, try the generic "kt-adv-heading" class (Fallback)
-    if (correctAnswer === "Answer not found") {
-        const paragraphMatch = blockHtml.match(/class="[^"]*kt-adv-heading[^"]*"[^>]*>[\s\S]*?(?:<strong>)?(.*?)(?:<\/strong>)?(?=\s*<\/p>|<br)/i);
-        if (paragraphMatch && paragraphMatch[1]) {
-            let ans = paragraphMatch[1].trim();
-            if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
-                correctAnswer = ans;
-            }
-        }
-    }
-
-    // 4. Clean up HTML entities
-    question = question.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
-    correctAnswer = correctAnswer.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
+    // HTML entities clean karna (e.g., &nbsp; and &#8220;)
+    correctAnswer = correctAnswer.replace(/&nbsp;/g, ' ').replace(/&#8220;|&#8221;|&ldquo;|&rdquo;/g, '"');
 
     results.push({
       question: question,
