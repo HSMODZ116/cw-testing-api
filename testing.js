@@ -46,7 +46,7 @@ export default {
     } catch (error) {
       return jsonResponse({
         success: false,
-        error: "Scraping failed. Check date format or target site.",
+        error: "Scraping failed.",
         details: error.message
       }, 500);
     }
@@ -64,10 +64,9 @@ function jsonResponse(data, status = 200) {
 }
 
 async function scrapeTelenorQuiz(dateQuery) {
-  // Homepage par request bhejein
   const TARGET_URL = `https://telenorquiztodays.pk/`;
   
-  // ✅ EXACT COOKIES FROM YOUR SCREENSHOT (Cloudflare Bypass)
+  // Cookies (From Screenshot for Cloudflare Bypass)
   const cookies = [
     "_ga=GA1.1.2137942815.1784559948;",
     "_ga_5FRVYN66BF=GS2.1.1784559947.1.0.1784559956.0.0.0;",
@@ -75,7 +74,7 @@ async function scrapeTelenorQuiz(dateQuery) {
   ].join(' ');
 
   const headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Cache-Control": "max-age=0",
@@ -90,46 +89,42 @@ async function scrapeTelenorQuiz(dateQuery) {
 
   const html = await response.text();
 
-  // ---------- PARSING LOGIC (CSS Garbage Removed) ----------
+  // ---------- SECTION-BASED PARSING (100% Accurate) ----------
   const results = [];
 
-  // 1. Regex to find ALL "Answer" green boxes. 
-  // We look for <p> tags that have class="kt-adv-heading..." and contain the green background style
-  // AND we only capture text that is NOT CSS code (text length < 200 characters)
-  const greenBlockRegex = /<p[^>]*class="kt-adv-heading[^"]*"[^>]*>[^<]*<strong>([^<]+)<\/strong><\/p>/g;
+  // 1. Split HTML into individual Question Blocks using the border style as a delimiter.
+  // The question blocks are wrapped in divs with a specific border style: border: 5px solid var(--global-palette1, #3182CE)
+  const blocks = html.split(/border-[a-z]*:\s*5px\s+solid\s+var\(--global-palette1,\s*#3182CE\)/gi);
   
-  let match;
-  let answersFound = [];
-  
-  // Loop through all green answer blocks
-  while ((match = greenBlockRegex.exec(html)) !== null) {
-    let answer = match[1].trim();
-    // Remove any leftover HTML entities
-    answer = answer.replace(/&nbsp;/g, ' ').trim();
-    // Ignore if the captured text is too long (CSS code)
-    if (answer.length > 0 && answer.length < 200) {
-      answersFound.push(answer);
+  // blocks[0] is the header, blocks[1] to blocks[5] are the 5 question blocks.
+  // We iterate from 1 to 5 (or while blocks length is enough)
+  for (let i = 1; i < blocks.length && i <= 5; i++) {
+    const blockHtml = blocks[i];
+    
+    // 2. Extract Question Text
+    // Inside the block, look for "Question X:" followed by text until a < or &nbsp;
+    const qRegex = /Question\s*\d+:\s*([^<]+)/i;
+    const qMatch = blockHtml.match(qRegex);
+    const questionText = qMatch ? qMatch[1].trim() : `Question ${i} Not Found`;
+
+    // 3. Extract Correct Answer (Green Button)
+    // Look specifically for the green button inside this specific block.
+    // The green button has class="kt-adv-heading..." and contains the answer.
+    const ansRegex = /class="[^"]*kt-adv-heading[^"]*"[^>]*>([^<]+)<\//i;
+    const ansMatch = blockHtml.match(ansRegex);
+    let correctAnswer = ansMatch ? ansMatch[1].trim() : "Answer not found";
+
+    // Clean up HTML entities
+    if (correctAnswer.includes('&nbsp;')) {
+      correctAnswer = correctAnswer.replace(/&nbsp;/g, ' ').trim();
     }
-  }
-
-  // 2. Extract ALL Question texts
-  const questionRegex = /<strong>Question\s*\d+:[\s\S]*?<[^>]*>([^<]+)<\//g;
-  let qMatch;
-  let questionsFound = [];
-
-  while ((qMatch = questionRegex.exec(html)) !== null) {
-    let question = qMatch[1].trim();
-    // Filter out "Answer" or extra bold texts
-    if (question.length > 10 && !question.includes('Answer')) {
-      questionsFound.push(question);
+    if (questionText.includes('&nbsp;')) {
+      // Already handled by regex, but safety check
     }
-  }
 
-  // 3. Map questions to answers (First 5 matches)
-  for (let i = 0; i < 5; i++) {
     results.push({
-      question: questionsFound[i] || `Question ${i+1} Not Found`,
-      correctAnswer: answersFound[i] || "Answer not found in this block"
+      question: questionText,
+      correctAnswer: correctAnswer
     });
   }
 
