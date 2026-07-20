@@ -89,7 +89,7 @@ async function scrapeTelenorQuiz(dateQuery) {
 
   const html = await response.text();
 
-  // ---------- ACCURATE BLOCK-SPLITTING + SMART ANSWER EXTRACTION ----------
+  // ---------- ACCURATE SPLITTING & GREEN BOX EXTRACTION ----------
   const results = [];
   const questionLabels = ['Question 1', 'Question 2', 'Question 3', 'Question 4', 'Question 5'];
   
@@ -107,35 +107,29 @@ async function scrapeTelenorQuiz(dateQuery) {
     // 1. Extract Question Text
     const qRegex = /Question\s*\d+:\s*([^<]+)/i;
     const qMatch = blockHtml.match(qRegex);
-    const questionText = qMatch ? qMatch[1].trim() : `Question ${i+1} Not Found`;
+    const questionText = qMatch ? qMatch[1].trim().replace(/&#8220;/g, '"').replace(/&#8221;/g, '"') : `Question ${i+1} Not Found`;
 
-    // 2. Extract Correct Answer (Smart Green Box Logic)
-    // Look for the green box style 'background-color: #24ff2a' and extract the text immediately following it.
-    // This handles answers both WITH and WITHOUT <strong> tags.
+    // 2. Extract Correct Answer (Class-Based Extraction)
+    // HTML mein green button class="kt-adv-heading..." ke andar hai
     let correctAnswer = "Answer not found";
     
-    // Use a general regex that captures everything inside the green box until a closing tag is found
-    const greenBoxRegex = /background-color:\s*#24ff2a[^>]*>([^<]+)(?:<\/[^>]+>)?/i;
-    const ansMatch = blockHtml.match(greenBoxRegex);
+    // Saare green boxes dhoondhein aur current block ke hisaab se match karein
+    const greenRegex = /class="[^"]*kt-adv-heading[^"]*"[^>]*>([^<]+)<\//gi;
+    let match;
+    let answersFound = [];
     
-    if (ansMatch && ansMatch[1]) {
-      let rawAnswer = ansMatch[1].trim();
-      // Remove the "Answer" label if it accidentally got captured
-      if (rawAnswer === "Answer" || rawAnswer === "Answer ") {
-        // If the first match was just "Answer", try capturing the next text element in the block
-        const fallbackRegex = /background-color:\s*#24ff2a[^>]*>.*?>(.*?)<\//i;
-        const fallbackMatch = blockHtml.match(fallbackRegex);
-        if (fallbackMatch && fallbackMatch[1]) {
-          rawAnswer = fallbackMatch[1].trim();
-        }
+    while ((match = greenRegex.exec(blockHtml)) !== null) {
+      let ans = match[1].trim();
+      // Clean up HTML entities and ignore "Answer" label
+      ans = ans.replace(/&nbsp;/g, ' ').replace(/&#8220;/g, '"').replace(/&#8221;/g, '"').trim();
+      if (ans.length > 1 && ans !== "Answer") {
+        answersFound.push(ans);
       }
-      // Clean up HTML entities
-      rawAnswer = rawAnswer.replace(/&nbsp;/g, ' ').trim();
-      
-      // Only accept if it's valid text (not too long, not CSS)
-      if (rawAnswer.length > 0 && rawAnswer.length < 200) {
-        correctAnswer = rawAnswer;
-      }
+    }
+
+    if (answersFound.length > 0) {
+      // Pehla answer jo "Answer" label nahi hai, woh correct answer hai
+      correctAnswer = answersFound[0];
     }
 
     results.push({
