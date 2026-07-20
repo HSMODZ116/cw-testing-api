@@ -21,8 +21,7 @@ export default {
       } catch (e) {}
     }
 
-    // Default to today's date if no query is provided
-    const dateSlug = query || 'today'; 
+    const dateSlug = query || 'today';
 
     try {
       const answers = await scrapeTelenorQuiz(dateSlug);
@@ -47,7 +46,7 @@ export default {
     } catch (error) {
       return jsonResponse({
         success: false,
-        error: "Scraping failed. Check date format or target site.",
+        error: "Scraping failed.",
         details: error.message
       }, 500);
     }
@@ -65,30 +64,21 @@ function jsonResponse(data, status = 200) {
 }
 
 async function scrapeTelenorQuiz(dateQuery) {
+  // Homepage par request bhejein
   const TARGET_URL = `https://telenorquiztodays.pk/`;
   
-  // ✅ EXACT COOKIES FROM YOUR SCREENSHOT (Cloudflare Bypass)
+  // Cookies (From Screenshot)
   const cookies = [
     "_ga=GA1.1.2137942815.1784559948;",
     "_ga_5FRVYN66BF=GS2.1.1784559947.1.0.1784559956.0.0.0;",
-    "__cf_bm=3ScbNnhJ7vXX6s43hXn5Xg9eS2.D8zKUVmJHeiWbwfw-1784559948-1.0.1.1-n9FvZRlV43PkbURqSvoYjnnqSpxLLfK5w9k3Kkf00Kpdrz7Lq7lDl3Vj2oy3sNrzK8GdR5ccvB5mD3HdUt_tvWySBQ2AS7sSC7C4UYk0;",
-    "FCCDCF=%5B%7B%22c%22%3A2%2C%22v%22%3A%22v2%22%2C%22s%22%3A%22%22%7D%5D;",
-    "FCNEC=%5B%5B%22AKsKormKa1sAs%22%5D%5D;"
+    "__cf_bm=3ScbNnhJ7vXX6s43hXn5Xg9eS2.D8zKUVmJHeiWbwfw-1784559948-1.0.1.1-n9FvZRlV43PkbURqSvoYjnnqSpxLLfK5w9k3Kkf00Kpdrz7Lq7lDl3Vj2oy3sNrzK8GdR5ccvB5mD3HdUt_tvWySBQ2AS7sSC7C4UYk0;"
   ].join(' ');
 
   const headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Cache-Control": "max-age=0",
-    "Sec-Ch-Ua": '"Not(A:Brand";v="99", "Google Chrome";v="133", "Chromium";v="133"',
-    "Sec-Ch-Ua-Mobile": "?0",
-    "Sec-Ch-Ua-Platform": '"Windows"',
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-    "Upgrade-Insecure-Requests": "1",
     "Cookie": cookies
   };
 
@@ -100,43 +90,37 @@ async function scrapeTelenorQuiz(dateQuery) {
 
   const html = await response.text();
 
-  // ---------- PARSING LOGIC ----------
+  // ---------- FIXED PARSING LOGIC ----------
   const results = [];
 
-  // 1. Split the HTML into Question segments using "Question X:" as delimiter
-  const sections = html.split(/(Question\s*\d+:\s*)/gi);
-  
-  // sections[0] is header, sections[1] is "Question 1:", sections[2] is content of Q1, etc.
-  for (let i = 1; i < sections.length; i += 2) {
-    const qHeader = sections[i];
-    const qContent = sections[i+1] || "";
-
-    // Extract Question Text
-    const questionMatch = qHeader.match(/Question\s*\d+:\s*([^<]+)/i);
-    const questionText = questionMatch ? questionMatch[1].trim() : "Unknown Question";
-
-    // Look for the Green Answer button within this specific qContent
-    let correctAnswer = "Answer not found in this block";
+  // Loop 5 times for 5 questions
+  for (let i = 1; i <= 5; i++) {
     
-    // Strategy 1: Look for the green background color style
-    const greenMatch = qContent.match(/background-color:\s*#24ff2a[^>]*>([^<]+)<\//i);
-    if (greenMatch) {
-      correctAnswer = greenMatch[1].trim();
-    } else {
-      // Strategy 2: Look for the Answer label and adjacent green styled text
-      const answerMatch = qContent.match(/Answer\s*<\/div>\s*<div[^>]*style[^>]*#24ff2a[^>]*>([^<]+)<\//i);
-      if (answerMatch) {
-        correctAnswer = answerMatch[1].trim();
-      } else {
-        // Strategy 3: Look for class with green background
-        const classMatch = qContent.match(/class="[^"]*kt-adv-heading[^"]*"[^>]*>([^<]+)<\//i);
-        if (classMatch) {
-          correctAnswer = classMatch[1].trim();
-        }
-      }
+    // 1. Extract Question Text
+    // Search for "Question i:" followed by text until a newline or < symbol
+    const qRegex = new RegExp(`Question\\s*${i}:\\s*([^<]+)`, 'i');
+    const qMatch = html.match(qRegex);
+    const questionText = qMatch ? qMatch[1].trim() : `Question ${i} Not Found`;
+
+    // 2. Extract Correct Answer (Green Button)
+    // The correct answer is always inside a div with background-color: #24ff2a
+    // We find the Answer for the current question by looking at the answer blocks sequentially
+    // or by grabbing all green blocks and picking the one matching the question index.
+    
+    // To be safe, we find ALL green answer blocks in the entire HTML
+    const greenBlocks = html.match(/background-color:\s*#24ff2a[^>]*>([^<]+)<\//gi);
+    
+    let correctAnswer = "Answer not found";
+    
+    if (greenBlocks && greenBlocks.length >= i) {
+      // Clean the specific block for Question 'i'
+      correctAnswer = greenBlocks[i-1]
+        .replace(/background-color:\s*#24ff2a[^>]*>/, '') // Remove the style part
+        .replace(/<\/?[^>]+(>|$)/g, "")                  // Remove any leftover tags
+        .trim();
     }
 
-    // Clean up the answer string
+    // Clean up answer string
     if (correctAnswer.includes('&nbsp;')) {
       correctAnswer = correctAnswer.replace(/&nbsp;/g, ' ').trim();
     }
@@ -147,6 +131,5 @@ async function scrapeTelenorQuiz(dateQuery) {
     });
   }
 
-  // Limit to 5 questions if more are captured
-  return results.slice(0, 5);
+  return results;
 }
