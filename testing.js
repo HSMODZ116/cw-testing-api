@@ -87,9 +87,10 @@ async function scrapeTelenorQuiz(dateQuery) {
   }
 
   const html = await response.text();
+
   const results = [];
 
-  // 1. Split HTML into 5 Question Blocks 
+  // 1. HTML ko 5 Question Blocks mein todna
   const questionLabels = ['Question 1', 'Question 2', 'Question 3', 'Question 4', 'Question 5'];
   
   for (let i = 0; i < questionLabels.length; i++) {
@@ -109,24 +110,20 @@ async function scrapeTelenorQuiz(dateQuery) {
     
     let blockHtml = html.substring(startIndex, endIndex);
 
-    // 2. Extract Clean Question
+    // 2. Extract Question
     let question = `Question ${i+1}:`;
     // Regex: "Question X:" ke baad ka text uthao jab tak options start na ho jayen
-    let qMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+?)(?=\s*<br\s*\/?>|\s*<p|\s*<ul|\s*<strong)/i);
-    if (qMatch && qMatch[1]) {
-        question = "Question " + (i+1) + ": " + qMatch[1].trim();
+    let questionTextMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+?)(?=\s*<br\s*\/?>|\s*<p|\s*<ul|\s*<strong)/i);
+    if (questionTextMatch && questionTextMatch[1]) {
+        question = "Question " + (i+1) + ": " + questionTextMatch[1].trim();
     }
 
-    // 3. Extract Correct Answer (Target EXACT Green Button)
+    // 3. Extract Correct Answer (Green Button ka text) - PERFECT STRATEGY
     let correctAnswer = "Answer not found";
 
-    // Step A: Search for the exact Green Button Class 
-    // Response.html me Green button ki class hai: "kt-adv-heading14_b823be-d9"
+    // Step A: Search for the EXACT Green Button Class ID (Q3, Q4, Q5 ki class)
     const greenBtnIndex = blockHtml.indexOf('class="kt-adv-heading14_b823be-d9"');
-    
     if (greenBtnIndex !== -1) {
-        // Step B: Class start (>) ke baad ka text uthana
-        // '>' aur uske baad wale '<' ke beech ka HTML content extract karna
         const closeTagIndex = blockHtml.indexOf('>', greenBtnIndex);
         if (closeTagIndex !== -1) {
             const contentStart = closeTagIndex + 1;
@@ -134,14 +131,9 @@ async function scrapeTelenorQuiz(dateQuery) {
             
             if (contentStart !== -1 && contentEnd !== -1) {
                 let extractedHtml = blockHtml.substring(contentStart, contentEnd).trim();
-                
-                // Step C: Remove ALL HTML tags (including <strong>, <p>, <br>, etc.)
                 let extracted = extractedHtml.replace(/<[^>]*>/g, ' ').trim();
+                extracted = extracted.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
                 
-                // Step D: Clean HTML entities & fix multiple spaces
-                extracted = extracted.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').replace(/\s+/g, ' ').trim();
-                
-                // Step E: Filter out "Answer" label
                 if (extracted.toLowerCase() !== 'answer' && extracted.length > 0 && extracted.length < 200) {
                     correctAnswer = extracted;
                 }
@@ -149,8 +141,31 @@ async function scrapeTelenorQuiz(dateQuery) {
         }
     }
 
-    // 4. Cleanup HTML entities for Question
-    question = question.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').replace(/\s+/g, ' ').trim();
+    // Step B: If Step A fails, try finding <strong> (Q1, Q2 style)
+    if (correctAnswer === "Answer not found") {
+        const strongMatch = blockHtml.match(/<strong>([^<]+)<\/strong>/i);
+        if (strongMatch && strongMatch[1]) {
+            let ans = strongMatch[1].trim();
+            if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
+                correctAnswer = ans;
+            }
+        }
+    }
+
+    // Step C: If both fail, try the generic "kt-adv-heading" class (Fallback)
+    if (correctAnswer === "Answer not found") {
+        const paragraphMatch = blockHtml.match(/class="[^"]*kt-adv-heading[^"]*"[^>]*>[\s\S]*?(?:<strong>)?(.*?)(?:<\/strong>)?(?=\s*<\/p>|<br)/i);
+        if (paragraphMatch && paragraphMatch[1]) {
+            let ans = paragraphMatch[1].trim();
+            if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
+                correctAnswer = ans;
+            }
+        }
+    }
+
+    // 4. Clean up HTML entities
+    question = question.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
+    correctAnswer = correctAnswer.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
 
     results.push({
       question: question,
