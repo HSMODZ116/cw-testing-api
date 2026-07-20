@@ -66,7 +66,7 @@ function jsonResponse(data, status = 200) {
 async function scrapeTelenorQuiz(dateQuery) {
   const TARGET_URL = `https://telenorquiztodays.pk/`;
   
-  // Cookies (Cloudflare Bypass)
+  // Cookies (From Screenshot for Cloudflare Bypass)
   const cookies = [
     "_ga=GA1.1.2137942815.1784559948;",
     "_ga_5FRVYN66BF=GS2.1.1784559947.1.0.1784559956.0.0.0;",
@@ -89,8 +89,10 @@ async function scrapeTelenorQuiz(dateQuery) {
 
   const html = await response.text();
 
-  // ---------- ACCURATE SPLITTING & GREEN BOX EXTRACTION ----------
+  // ---------- ACCURATE BLOCK-SPLITTING (Using Question Labels) ----------
   const results = [];
+
+  // 1. Split the HTML into Question blocks using 'Question X:' label as delimiter
   const questionLabels = ['Question 1', 'Question 2', 'Question 3', 'Question 4', 'Question 5'];
   
   for (let i = 0; i < questionLabels.length; i++) {
@@ -104,32 +106,29 @@ async function scrapeTelenorQuiz(dateQuery) {
     
     const blockHtml = html.substring(startIndex, endIndex);
     
-    // 1. Extract Question Text
+    // 2. Extract Question Text
     const qRegex = /Question\s*\d+:\s*([^<]+)/i;
     const qMatch = blockHtml.match(qRegex);
-    const questionText = qMatch ? qMatch[1].trim().replace(/&#8220;/g, '"').replace(/&#8221;/g, '"') : `Question ${i+1} Not Found`;
+    const questionText = qMatch ? qMatch[1].trim() : `Question ${i+1} Not Found`;
 
-    // 2. Extract Correct Answer (Class-Based Extraction)
-    // HTML mein green button class="kt-adv-heading..." ke andar hai
+    // 3. Extract Correct Answer (UPDATED GREEN BUTTON LOGIC)
+    // Look for the green box style 'background-color: #24ff2a' and extract the text immediately following it.
+    // This handles answers both WITH and WITHOUT <strong> tags.
     let correctAnswer = "Answer not found";
     
-    // Saare green boxes dhoondhein aur current block ke hisaab se match karein
-    const greenRegex = /class="[^"]*kt-adv-heading[^"]*"[^>]*>([^<]+)<\//gi;
-    let match;
-    let answersFound = [];
+    // Use a general regex that captures everything inside the green box
+    const greenBoxRegex = /background-color:\s*#24ff2a[^>]*>([^<]+)<\//i;
+    const ansMatch = blockHtml.match(greenBoxRegex);
     
-    while ((match = greenRegex.exec(blockHtml)) !== null) {
-      let ans = match[1].trim();
-      // Clean up HTML entities and ignore "Answer" label
-      ans = ans.replace(/&nbsp;/g, ' ').replace(/&#8220;/g, '"').replace(/&#8221;/g, '"').trim();
-      if (ans.length > 1 && ans !== "Answer") {
-        answersFound.push(ans);
+    if (ansMatch && ansMatch[1]) {
+      let rawAnswer = ansMatch[1].trim();
+      // Clean up HTML entities
+      rawAnswer = rawAnswer.replace(/&nbsp;/g, ' ').trim();
+      
+      // Ignore if it's CSS-like code or too short
+      if (rawAnswer.length > 0 && rawAnswer.length < 200) {
+        correctAnswer = rawAnswer;
       }
-    }
-
-    if (answersFound.length > 0) {
-      // Pehla answer jo "Answer" label nahi hai, woh correct answer hai
-      correctAnswer = answersFound[0];
     }
 
     results.push({
