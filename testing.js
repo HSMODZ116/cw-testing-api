@@ -87,9 +87,10 @@ async function scrapeTelenorQuiz(dateQuery) {
   }
 
   const html = await response.text();
+
   const results = [];
 
-  // 1. Split into Question Blocks safely
+  // 1. Split into Question Blocks
   const questionLabels = ['Question 1', 'Question 2', 'Question 3', 'Question 4', 'Question 5'];
   
   for (let i = 0; i < questionLabels.length; i++) {
@@ -99,55 +100,71 @@ async function scrapeTelenorQuiz(dateQuery) {
     let startIndex = html.indexOf(currentLabel);
     let endIndex = nextLabel ? html.indexOf(nextLabel, startIndex + 1) : html.length;
     
+    // Agar block mein FAQs aajaye toh cut kar do
+    const faqsIndex = html.indexOf('FAQs', startIndex);
+    if (faqsIndex !== -1 && faqsIndex < endIndex) {
+        endIndex = faqsIndex;
+    }
+
     if (startIndex === -1) continue;
     
     let blockHtml = html.substring(startIndex, endIndex);
 
-    // 2. Extract Clean Question
+    // 2. Extract Clean Question (Remove all Options)
     let question = `Question ${i+1}:`;
     let qMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+)/i);
     if (qMatch && qMatch[1]) {
         question = "Question " + (i+1) + ": " + qMatch[1].trim();
     }
 
-    // 3. NEW LOGIC: Target ONLY the element with Green Background
+    // 3. EXACT GREEN BUTTON STRATEGY (3 Layers)
     let correctAnswer = "Answer not found";
 
-    // Step A: Dhoondho exact green color (#24ff2a) wala style
-    const greenStyleMatch = blockHtml.match(/style="[^"]*background(?:-color)?:\s*#24ff2a[^"]*"/i);
-    
-    if (greenStyleMatch) {
-        // Step B: Uss style ke baad ka HTML text uthao jab tak < na aa jaye
-        const styleEndIndex = blockHtml.indexOf('"', blockHtml.indexOf(greenStyleMatch[0]) + greenStyleMatch[0].length);
-        if (styleEndIndex !== -1) {
-            // Ab hum uss element ke close ('>') ke baad ka text dhoondhenge
-            const closeTagIndex = blockHtml.indexOf('>', styleEndIndex);
-            if (closeTagIndex !== -1) {
-                // Text start karega closeTag ke baad se
-                let textStart = closeTagIndex + 1;
-                let textEnd = blockHtml.indexOf('<', textStart);
-                
-                if (textEnd !== -1) {
-                    let rawAns = blockHtml.substring(textStart, textEnd).trim();
-                    // Saaf karo HTML tags aur entities
-                    rawAns = rawAns.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
-                    
-                    if(rawAns.length > 0 && rawAns.length < 200) {
-                        correctAnswer = rawAns;
-                    }
+    // LAYER 1: Class-based match (For Q1 and Q5 style)
+    // Search for class "kt-adv-heading" followed by "Answer" label, then take the next "kt-adv-heading"
+    const labelIndex = blockHtml.indexOf('class="kt-adv-heading14_4cf857-70"');
+    if (labelIndex !== -1) {
+        const btnIndex = blockHtml.indexOf('class="kt-adv-heading', labelIndex + 1);
+        if (btnIndex !== -1) {
+            const openTag = blockHtml.indexOf('>', btnIndex) + 1;
+            const closeTag = blockHtml.indexOf('<', openTag);
+            if (openTag !== -1 && closeTag !== -1) {
+                let raw = blockHtml.substring(openTag, closeTag).trim();
+                raw = raw.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
+                if(raw.toLowerCase() !== 'answer' && raw.length > 0 && raw.length < 100) {
+                    correctAnswer = raw;
                 }
             }
         }
     }
 
-    // Fallback: Agar Green color nahi mila (e.g., Q2 style me strong tag hai)
+    // LAYER 2: Strong Tag Extraction (For Q2 style)
     if (correctAnswer === "Answer not found") {
-        const strongMatch = blockHtml.match(/<strong>([^<]+)<\/strong>/i);
-        if (strongMatch && strongMatch[1]) {
-             let ans = strongMatch[1].trim();
-             if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
-                 correctAnswer = ans;
-             }
+        const strongMatch = blockHtml.match(/<strong>([^<]+)<\/strong>/g);
+        if (strongMatch && strongMatch.length >= 2) {
+            // Because first <strong> is "Answer label", take the second one
+            let ans = strongMatch[1].replace(/<[^>]*>/g, '').trim();
+            if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
+                correctAnswer = ans;
+            }
+        } else if (strongMatch && strongMatch.length === 1) {
+            // Fallback if only one strong exists (Q3/4 fallback)
+            let ans = strongMatch[0].replace(/<[^>]*>/g, '').trim();
+            if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
+                correctAnswer = ans;
+            }
+        }
+    }
+
+    // LAYER 3: Green Background Text Extraction (For Q3 and Q4 style)
+    if (correctAnswer === "Answer not found") {
+        // Dhoondho Green color wala paragraph
+        const greenMatch = blockHtml.match(/style="[^"]*background(?:-color)?:\s*#24ff2a[^"]*"[^>]*>([^<]+)<\/p>/i);
+        if (greenMatch && greenMatch[1]) {
+            let ans = greenMatch[1].trim();
+            if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
+                correctAnswer = ans;
+            }
         }
     }
 
