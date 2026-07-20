@@ -87,10 +87,9 @@ async function scrapeTelenorQuiz(dateQuery) {
   }
 
   const html = await response.text();
-
   const results = [];
 
-  // 1. HTML ko 5 Question Blocks mein todna
+  // 1. HTML ko Sirf 5 Question Blocks mein todna using 'Question X:'
   const questionLabels = ['Question 1', 'Question 2', 'Question 3', 'Question 4', 'Question 5'];
   
   for (let i = 0; i < questionLabels.length; i++) {
@@ -104,46 +103,50 @@ async function scrapeTelenorQuiz(dateQuery) {
     
     let blockHtml = html.substring(startIndex, endIndex);
 
-    // 2. Extract Question
+    // 2. Extract Clean Question (Remove Options)
     let question = `Question ${i+1}:`;
     let questionTextMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+)/);
     if (questionTextMatch && questionTextMatch[1]) {
         question = "Question " + (i+1) + ": " + questionTextMatch[1].trim();
     }
 
-    // 3. Extract Correct Answer (Green Button ka text) - FIXED STRATEGY
-    // HTML me Green button layout kuch aisa hai: <p class="kt-adv..."> TEXT </p> ya <strong> TEXT </strong>
+    // 3. Extract Correct Answer (FIX: Target Green Button and its immediate text)
     let correctAnswer = "Answer not found";
     
-    // Strategy 1: Pehle dhoondho <p class="...kt-adv-heading..."> ke andar koi bhi text
-    // "> ke baad text aata hai jab tak < na aa jaye
-    // (?:<strong>)?(.*?)(?:<\/strong>)? -> Ye optional strong tags ko handle karta hai
-    const paragraphMatch = blockHtml.match(/class="[^"]*kt-adv-heading[^"]*"[^>]*>[\s\S]*?(?:<strong>)?(.*?)(?:<\/strong>)?(?=\s*<\/p>|<br)/i);
+    // Tareeqa: Green button (background-color: #24ff2a) ke baad ka text uthana.
+    // Q1/Q2 answers were inside the button, Q3/Q4/Q5 answers are RIGHT NEXT to the green label.
     
-    if (paragraphMatch && paragraphMatch[1]) {
-        let ans = paragraphMatch[1].trim();
-        // Ignore karain agar answer "Answer" hai, kyunke q1, q3 me label "Answer" bhi hai
-        if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
+    // Match pattern: Green button class ko dhoondho, phir text extract karo jo style ke baad aata hai.
+    const greenBtnMatch = blockHtml.match(/class="[^"]*kt-adv-heading[^"]*"[^>]*style="[^"]*background(?:-color)?:\s*#24ff2a[^"]*"[^>]*>[\s\S]*?>(.*?)<\//i);
+    
+    if (greenBtnMatch && greenBtnMatch[1]) {
+        let ans = greenBtnMatch[1].trim();
+        // Agar text "Answer" ya "<strong>Answer" hai, toh reject karo
+        if(ans.includes('Answer') === false) {
             correctAnswer = ans;
+        } else {
+            // Agar mila "<strong>Answer", toh hum Green button ke 'next sibling' ki text uthayenge.
+            // Isko simple tarike se karne ke liye hum agle paragraph ko uthayenge.
+            const afterGreenBtnMatch = blockHtml.match(/<p[^>]*>\s*<strong>([^<]+)<\/strong>\s*<\/p>/g);
+            if (afterGreenBtnMatch) {
+                // Regex se pehla strong text nikaalo
+                const finalMatch = afterGreenBtnMatch[afterGreenBtnMatch.length-1].match(/<strong>([^<]+)<\/strong>/);
+                if (finalMatch) correctAnswer = finalMatch[1].trim();
+            }
+        }
+    }
+    
+    // Agar strong tag ke bina ho to (Q1,Q2 style)
+    if (correctAnswer === "Answer not found") {
+        const directMatch = blockHtml.match(/<p[^>]*class="[^"]*kt-adv-heading[^"]*"[^>]*>([^<]+)<\/p>/i);
+        if (directMatch && directMatch[1] && directMatch[1].toLowerCase() !== 'answer') {
+            correctAnswer = directMatch[1].trim();
         }
     }
 
-    // Strategy 2: Agar upar se kuch nahi mila, to <strong> dhoondho (fallback for Q2)
-    if(correctAnswer === "Answer not found") {
-      const strongMatch = blockHtml.match(/<strong>([^<]+)<\/strong>/i);
-      if (strongMatch && strongMatch[1]) {
-          let ans = strongMatch[1].trim();
-          if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
-              correctAnswer = ans;
-          }
-      }
-    }
-
-    // 4. Clean up HTML entities (yeh saare &nbsp; aur quote mark hata dega)
-    // Pehle question ko clear karo
-    question = question.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
-    // Phir answer ko clear karo
-    correctAnswer = correctAnswer.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
+    // 4. Clean up HTML entities (Remove quotes and tags)
+    question = question.replace(/<[^>]*>|&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
+    correctAnswer = correctAnswer.replace(/<[^>]*>|&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
 
     results.push({
       question: question,
