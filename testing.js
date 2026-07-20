@@ -66,7 +66,6 @@ function jsonResponse(data, status = 200) {
 async function scrapeTelenorQuiz(dateQuery) {
   const TARGET_URL = `https://telenorquiztodays.pk/`;
   
-  // Cookies (Screenshot se)
   const cookies = [
     "_ga=GA1.1.2137942815.1784559948;",
     "_ga_5FRVYN66BF=GS2.1.1784559947.1.0.1784559956.0.0.0;",
@@ -88,49 +87,52 @@ async function scrapeTelenorQuiz(dateQuery) {
   }
 
   const html = await response.text();
+
   const results = [];
 
-  // 1. HTML ko Question blocks mein todna
-  const blocks = html.match(/Question \d+?:[\s\S]*?(?=(Question \d+?:|Video Guide|$))/gi);
-
-  if (!blocks) {
-    return results;
-  }
-
-  for (let i = 0; i < blocks.length; i++) {
-    const block = blocks[i];
-
-    // 2. SIRF QUESTION extract karna (Options ko ignore karna)
-    // Regex `Question X:.*?<br` tak rukna hai (ke baad options start hote hain)
-    let questionMatch = block.match(/(Question \d+?:.*?)(?:<br\s*\/?>|<\/p>|<strong)/i);
-    let question = questionMatch ? questionMatch[1].trim() : `Question ${i+1} Not Found`;
+  // 1. HTML ko 5 Question Blocks mein todna using 'Question X:' delimiters
+  // Is baar start aur end boundaries ko strict kar diya hai.
+  const questionLabels = ['Question 1', 'Question 2', 'Question 3', 'Question 4', 'Question 5'];
+  
+  for (let i = 0; i < questionLabels.length; i++) {
+    const currentLabel = questionLabels[i];
+    const nextLabel = i < questionLabels.length - 1 ? questionLabels[i + 1] : null;
     
-    // HTML tags aur entities clean karna (Sirf text rakhna hai)
-    question = question.replace(/<[^>]*>/g, '').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;/g, '"').trim();
+    let startIndex = html.indexOf(currentLabel);
+    let endIndex = nextLabel ? html.indexOf(nextLabel, startIndex + 1) : html.length;
+    
+    if (startIndex === -1) continue;
+    
+    let blockHtml = html.substring(startIndex, endIndex);
 
-    // 3. CORRECT ANSWER extract karna (Green button ka text)
-    let correctAnswer = "Answer not found";
-    
-    // Green Button ke background color (hex #24ff2a) ka pattern match karna
-    // Class ".kt-adv-heading" aur style "background-color: #24ff2a" dhoondho
-    const greenBtnMatch = block.match(/class="[^"]*kt-adv-heading[^"]*"[^>]*style="[^"]*background(?:-color)?:\s*#24ff2a[^"]*"[^>]*>([^<]+)/i);
-    
-    if (greenBtnMatch && greenBtnMatch[1]) {
-      let ans = greenBtnMatch[1].trim();
-      
-      // Agar text "Answer" hai to usko reject karo. Sirf correct answer lo.
-      if (ans.toLowerCase() !== "answer" && ans.length > 0 && ans.length < 100) {
-        correctAnswer = ans;
-      } else {
-        // Try extra extraction inside strong tags if answer extraction failed
-        const strongMatch = block.match(/class="[^"]*kt-adv-heading[^"]*"[^>]*style="[^"]*background(?:-color)?:\s*#24ff2a[^"]*"[^>]*>[\s\S]*?<strong>([^<]+)<\/strong>/i);
-        if (strongMatch && strongMatch[1] && strongMatch[1].toLowerCase() !== "answer") {
-             correctAnswer = strongMatch[1].trim();
-        }
-      }
+    // 2. Extract Question (Clean text from the start until we hit options)
+    // Ye regex "Question X:" se start karega aur uske baad jo text hai wo le lega
+    // jab tak ki koi HTML tag na aa jaye.
+    let question = `Question ${i+1}:`;
+    let questionTextMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+)/);
+    if (questionTextMatch && questionTextMatch[1]) {
+        question = "Question " + (i+1) + ": " + questionTextMatch[1].trim();
     }
 
-    // Saaf kar dena HTML entities ko
+    // 3. Extract Correct Answer (Green Button ka text)
+    // Hum Regex use karenge specific classes dhoondhne ke bajaye.
+    // Green Button ka answer HTML mein is tarah hota hai: <p class="..."> <strong>ANSWER</strong> </p>
+    // Hum block mein search karenge <p class="kt-adv..."> <strong>...</strong>
+    let correctAnswer = "Answer not found";
+    
+    // Simplified Matching: Class containing kt-adv-heading, then find <strong> tag inside it.
+    // We also add a restriction: The text inside <strong> must NOT be exactly "Answer"
+    const simpleAnswerMatch = blockHtml.match(/class="[^"]*kt-adv-heading[^"]*"[^>]*>[\s\S]*?<strong>([^<]+)<\/strong>/i);
+    
+    if (simpleAnswerMatch && simpleAnswerMatch[1]) {
+        let ans = simpleAnswerMatch[1].trim();
+        if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
+            correctAnswer = ans;
+        }
+    }
+
+    // 4. Clean up HTML entities
+    question = question.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;/g, '"').trim();
     correctAnswer = correctAnswer.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;/g, '"').trim();
 
     results.push({
