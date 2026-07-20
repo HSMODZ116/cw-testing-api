@@ -66,7 +66,7 @@ function jsonResponse(data, status = 200) {
 async function scrapeTelenorQuiz(dateQuery) {
   const TARGET_URL = `https://telenorquiztodays.pk/`;
   
-  // Cookies (From Screenshot for Cloudflare Bypass)
+  // Cookies (Cloudflare Bypass)
   const cookies = [
     "_ga=GA1.1.2137942815.1784559948;",
     "_ga_5FRVYN66BF=GS2.1.1784559947.1.0.1784559956.0.0.0;",
@@ -89,46 +89,50 @@ async function scrapeTelenorQuiz(dateQuery) {
 
   const html = await response.text();
 
-  // ---------- ACCURATE BLOCK-SPLITTING (Using Question Labels) ----------
+  // ---------- ACCURATE BLOCK-SPLITTING + SMART ANSWER EXTRACTION ----------
   const results = [];
-
-  // 1. Split the HTML into Question blocks using 'Question X:' label as delimiter
-  // This ensures each block contains exactly 1 question and its answer
   const questionLabels = ['Question 1', 'Question 2', 'Question 3', 'Question 4', 'Question 5'];
   
   for (let i = 0; i < questionLabels.length; i++) {
     const currentLabel = questionLabels[i];
     const nextLabel = i < questionLabels.length - 1 ? questionLabels[i + 1] : null;
     
-    // Extract the block between current question label and next question label (or end of string)
     let startIndex = html.indexOf(currentLabel);
     let endIndex = nextLabel ? html.indexOf(nextLabel, startIndex + 1) : html.length;
     
-    // If label not found, skip
     if (startIndex === -1) continue;
     
     const blockHtml = html.substring(startIndex, endIndex);
     
-    // 2. Extract Question Text
-    // Inside the block, look for "Question X:" followed by text until a < or &nbsp;
+    // 1. Extract Question Text
     const qRegex = /Question\s*\d+:\s*([^<]+)/i;
     const qMatch = blockHtml.match(qRegex);
     const questionText = qMatch ? qMatch[1].trim() : `Question ${i+1} Not Found`;
 
-    // 3. Extract Correct Answer (Green Button)
-    // Look specifically for the green button text inside this specific block.
-    // The green button has class="kt-adv-heading..." and contains the answer text.
-    // We look for the specific text pattern that is NOT CSS code.
-    // The answer text is usually within <strong> tags inside the kt-adv-heading div.
-    const ansRegex = /<p[^>]*class="[^"]*kt-adv-heading[^"]*"[^>]*>[^<]*<strong>([^<]+)<\/strong><\/p>/i;
-    const ansMatch = blockHtml.match(ansRegex);
-    
+    // 2. Extract Correct Answer (Smart Green Box Logic)
+    // Look for the green box style 'background-color: #24ff2a' and extract the text immediately following it.
+    // This handles answers both WITH and WITHOUT <strong> tags.
     let correctAnswer = "Answer not found";
-    if (ansMatch) {
+    
+    // Use a general regex that captures everything inside the green box until a closing tag is found
+    const greenBoxRegex = /background-color:\s*#24ff2a[^>]*>([^<]+)(?:<\/[^>]+>)?/i;
+    const ansMatch = blockHtml.match(greenBoxRegex);
+    
+    if (ansMatch && ansMatch[1]) {
       let rawAnswer = ansMatch[1].trim();
-      // Remove any leftover HTML entities
+      // Remove the "Answer" label if it accidentally got captured
+      if (rawAnswer === "Answer" || rawAnswer === "Answer ") {
+        // If the first match was just "Answer", try capturing the next text element in the block
+        const fallbackRegex = /background-color:\s*#24ff2a[^>]*>.*?>(.*?)<\//i;
+        const fallbackMatch = blockHtml.match(fallbackRegex);
+        if (fallbackMatch && fallbackMatch[1]) {
+          rawAnswer = fallbackMatch[1].trim();
+        }
+      }
+      // Clean up HTML entities
       rawAnswer = rawAnswer.replace(/&nbsp;/g, ' ').trim();
-      // Ignore if it's CSS-like code
+      
+      // Only accept if it's valid text (not too long, not CSS)
       if (rawAnswer.length > 0 && rawAnswer.length < 200) {
         correctAnswer = rawAnswer;
       }
