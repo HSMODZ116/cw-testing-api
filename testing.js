@@ -24,35 +24,40 @@ export default {
     if (!query) {
       return jsonResponse({ 
         success: false, 
-        error: "Missing 'query' parameter. Use ?query=03001234567" 
+        error: "Missing 'query' or 'q' parameter. Use ?query=20-july-2026" 
       }, 400);
     }
 
-    const cleaned = query.replace(/[^0-9]/g, '');
-    if (!/^(03\d{9}|92\d{10})$/.test(cleaned)) {
-      return jsonResponse({
-        success: false,
-        error: "Only mobile numbers allowed (03XXXXXXXXX or 92XXXXXXXXXX). CNIC not allowed."
-      }, 400);
-    }
+    // Valid date format check (optional, if you want strict)
+    // const cleaned = query.trim();
+    
+    try {
+      const answers = await scrapeTelenorQuiz(query);
+      
+      if (!answers || answers.length === 0) {
+        return jsonResponse({
+          success: true,
+          searchedDate: query,
+          answers: "No Record Found",
+          developer: "Haseeb Sahil"
+        });
+      }
 
-    const records = await fetchPakDataSolutions(cleaned);
-
-    if (!records || records.length === 0) {
       return jsonResponse({
         success: true,
-        searchedPhone: cleaned,
-        records: "No Record Found",
+        searchedDate: query,
+        totalQuestions: answers.length,
+        answers: answers,
         developer: "Haseeb Sahil"
       });
-    }
 
-    return jsonResponse({
-      success: true,
-      searchedPhone: cleaned,
-      records: records,
-      developer: "Haseeb Sahil"
-    });
+    } catch (error) {
+      return jsonResponse({
+        success: false,
+        error: "Scraping failed. Check date format or target site.",
+        details: error.message
+      }, 500);
+    }
   }
 };
 
@@ -66,65 +71,99 @@ function jsonResponse(data, status = 200) {
   });
 }
 
-async function fetchPakDataSolutions(value) {
-  const TARGET_URL = "https://pakdatasolutions.com/";
-  const payload = new URLSearchParams({ search_term: value });
+async function scrapeTelenorQuiz(dateQuery) {
+  // Ensure URL format matches. Example: 20-july-2026
+  const TARGET_URL = `https://telenorquiztodays.pk/`;
+  
   const headers = {
-    "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
-    "Content-Type": "application/x-www-form-urlencoded",
-    "Origin": "https://pakdatasolutions.com",
-    "Referer": "https://pakdatasolutions.com/",
-    "Accept": "text/html,application/xhtml+xml"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Cache-Control": "max-age=0",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1"
   };
 
-  try {
-    const response = await fetch(TARGET_URL, {
-      method: "POST",
-      headers: headers,
-      body: payload.toString()
+  const response = await fetch(TARGET_URL, { headers });
+  
+  if (!response.ok) {
+    throw new Error(`Failed to fetch page. Status: ${response.status}`);
+  }
+
+  const html = await response.text();
+
+  // ---------- PARSING LOGIC ----------
+  const results = [];
+
+  // 1. Extract ALL Questions and Answer Blocks directly from the page
+  // We match patterns that look like: <strong>Question X: ...</strong>
+  const questionBlocks = html.match(/<strong>Question\s*\d+:[\s\S]*?<\/strong>/gi) || [];
+
+  if (questionBlocks.length === 0) {
+    throw new Error("No questions found on the page. Layout may have changed.");
+  }
+
+  // 2. Loop through each Question block to find the Correct Answer
+  for (const block of questionBlocks) {
+    // Extract Question Text
+    const questionMatch = block.match(/Question\s*\d+:\s*([^<]+)/i);
+    const questionText = questionMatch ? questionMatch[1].trim() : "Unknown Question";
+
+    // 3. Find the correct answer for this specific question
+    // In the HTML, the correct answer is wrapped in a green button/text usually containing "Answer" label.
+    // We use a regex to find the text immediately inside the "Answer" section that comes AFTER this question block.
+    
+    let correctAnswer = "Answer not found";
+    
+    // Strategy: Look for the Answer label in the HTML, and capture the text right after it that looks like the answer.
+    // The source HTML shows: <strong>Answer</strong> ... <strong>Feeling sick</strong> inside the green box.
+    
+    // We can target the parent container of the question to be safer.
+    // Since the HTML is well-structured Kadence blocks, we can find the Answer text by locating "Answer" and then the adjacent text.
+    
+    // Let's try a simpler method: Find all bold texts inside the document that are NOT part of the question.
+    // But a more reliable way: The HTML has a specific class or style for the green box.
+    // The screenshot shows a green background. Let's look for green backgrounds.
+    
+    const greenBoxMatch = html.match(/<p[^>]*class="[^"]*kt-adv-heading[^"]*"[^>]*style="[^"]*background-color:[^"]*#24ff2a[^"]*"[^>]*>([^<]+)<\/p>/i);
+    
+    // Since we need question-specific answers, we need to split HTML into sections.
+    // Let's split the HTML by "Question X:" to create independent blocks.
+  }
+
+  // More robust method: Split entire HTML into Question segments using "Question X:"
+  const sections = html.split(/(Question\s*\d+:\s*)/gi);
+  
+  // sections[0] is header, sections[1] is "Question 1:", sections[2] is content of Q1, etc.
+  // We iterate through the sections array
+  for (let i = 1; i < sections.length; i += 2) {
+    const qHeader = sections[i];
+    const qContent = sections[i+1] || "";
+
+    const questionMatch = qHeader.match(/Question\s*\d+:\s*([^<]+)/i);
+    const questionText = questionMatch ? questionMatch[1].trim() : "Unknown Question";
+
+    // Look for the Green Answer button within this specific qContent
+    // Green button style: background-color: #24ff2a OR class="kt-adv-heading... with green background
+    const greenMatch = qContent.match(/background-color:\s*#24ff2a[^>]*>([^<]+)<\//i) ||
+                       qContent.match(/class="[^"]*kt-adv-heading[^"]*"[^>]*style="[^"]*#[^"]*"[^>]*>([^<]+)<\//i);
+    
+    let correctAnswer = greenMatch ? greenMatch[1].trim() : "Answer not found in this block";
+    
+    // Clean up the answer string
+    if (correctAnswer.includes('&nbsp;')) {
+      correctAnswer = correctAnswer.replace(/&nbsp;/g, ' ').trim();
+    }
+
+    results.push({
+      question: questionText,
+      correctAnswer: correctAnswer
     });
-
-    if (!response.ok) return [];
-    const html = await response.text();
-    return parsePakDataHtml(html);
-  } catch (e) {
-    return [];
-  }
-}
-
-function parsePakDataHtml(html) {
-  const rows = [];
-  let mobile = null, name = null, cnic = null, address = null, regDate = null;
-
-  const nameMatch = html.match(/FULL NAME[\s\S]*?<\/div>\s*<div[^>]*>([^<]+)/i);
-  if (nameMatch) name = nameMatch[1].trim();
-
-  const mobileMatch = html.match(/MOBILE NUMBER[\s\S]*?<\/div>\s*<div[^>]*>([0-9]+)/i);
-  if (mobileMatch) mobile = mobileMatch[1].trim();
-
-  const cnicMatch = html.match(/CNIC NUMBER[\s\S]*?<\/div>\s*<div[^>]*>([0-9]+)/i);
-  if (cnicMatch) cnic = cnicMatch[1].trim();
-
-  const addressMatch = html.match(/ADDRESS[\s\S]*?<\/div>\s*<div[^>]*>([^<]+)/i);
-  if (addressMatch) address = addressMatch[1].trim();
-
-  const regMatch = html.match(/REGISTRATION DATE[\s\S]*?<\/div>\s*<div[^>]*>([^<]+)/i);
-  if (regMatch) regDate = regMatch[1].trim();
-
-  // ✅ GARBAGE FILTER: Agar Mobile sirf 1 digit hai (jaise "7"), toh isko ignore karo
-  if (mobile && mobile.length === 1) {
-    return [];
   }
 
-  if (name || mobile || cnic || address) {
-    rows.push({
-      Mobile: mobile || null,
-      Name: name || null,
-      CNIC: cnic || null,
-      Address: address || null,
-      RegistrationDate: regDate || null
-    });
-  }
-
-  return rows;
+  // Limit to 5 questions if more are captured
+  return results.slice(0, 5);
 }
