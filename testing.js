@@ -66,7 +66,6 @@ function jsonResponse(data, status = 200) {
 async function scrapeTelenorQuiz(dateQuery) {
   const TARGET_URL = `https://telenorquiztodays.pk/`;
   
-  // Cookies (From DevTools Screenshot)
   const cookies = [
     "_ga=GA1.1.2137942815.1784559948;",
     "_ga_5FRVYN66BF=GS2.1.1784559947.1.0.1784559956.0.0.0;",
@@ -110,42 +109,39 @@ async function scrapeTelenorQuiz(dateQuery) {
     
     let blockHtml = html.substring(startIndex, endIndex);
 
-    // 2. Extract Clean Question (Remove Options from text)
+    // 2. Extract Clean Question
     let question = `Question ${i+1}:`;
-    // FIX: Question ke baad jo options hai, unko hatane ke liye sabse pehla <br> ya <p> ya <strong> dhoondho
-    let qMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+)(?=\s*<br\s*\/?>|\s*<p|\s*<strong)/i);
+    // Regex: "Question X:" ke baad ka text uthao jab tak options start na ho jayen
+    let qMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+?)(?=\s*<br\s*\/?>|\s*<p|\s*<ul|\s*<strong)/i);
     if (qMatch && qMatch[1]) {
         question = "Question " + (i+1) + ": " + qMatch[1].trim();
-    } else {
-        // Fallback agar regex fail ho jaye
-        const simpleMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+)/i);
-        if (simpleMatch) {
-            question = "Question " + (i+1) + ": " + simpleMatch[1].trim();
-        }
     }
 
-    // 3. Extract Correct Answer (Target EXACT Green Button ID)
+    // 3. Extract Correct Answer (Target EXACT Green Button)
     let correctAnswer = "Answer not found";
 
-    // Step A: Search for the exact Green Button Class ID found in your HTML file
-    // HTML me Green Button ka class exactly yeh hai: "kt-adv-heading14_b823be-d9"
+    // Step A: Search for the exact Green Button Class 
+    // Response.html me Green button ki class hai: "kt-adv-heading14_b823be-d9"
     const greenBtnIndex = blockHtml.indexOf('class="kt-adv-heading14_b823be-d9"');
     
     if (greenBtnIndex !== -1) {
         // Step B: Class start (>) ke baad ka text uthana
-        // '>' aur uske baad wale '<' ke beech ka text extract karna
+        // '>' aur uske baad wale '<' ke beech ka HTML content extract karna
         const closeTagIndex = blockHtml.indexOf('>', greenBtnIndex);
         if (closeTagIndex !== -1) {
-            const textStart = closeTagIndex + 1;
-            const textEnd = blockHtml.indexOf('<', textStart);
+            const contentStart = closeTagIndex + 1;
+            const contentEnd = blockHtml.indexOf('<', contentStart);
             
-            if (textStart !== -1 && textEnd !== -1) {
-                let extracted = blockHtml.substring(textStart, textEnd).trim();
+            if (contentStart !== -1 && contentEnd !== -1) {
+                let extractedHtml = blockHtml.substring(contentStart, contentEnd).trim();
                 
-                // Clean HTML entities & Tags (Remove <strong> if it exists inside)
-                extracted = extracted.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
+                // Step C: Remove ALL HTML tags (including <strong>, <p>, <br>, etc.)
+                let extracted = extractedHtml.replace(/<[^>]*>/g, ' ').trim();
                 
-                // Step C: Filter out "Answer" label (Only if it's not the correct answer)
+                // Step D: Clean HTML entities & fix multiple spaces
+                extracted = extracted.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').replace(/\s+/g, ' ').trim();
+                
+                // Step E: Filter out "Answer" label
                 if (extracted.toLowerCase() !== 'answer' && extracted.length > 0 && extracted.length < 200) {
                     correctAnswer = extracted;
                 }
@@ -153,9 +149,8 @@ async function scrapeTelenorQuiz(dateQuery) {
         }
     }
 
-    // 4. Final Cleanup (Remove extra spaces and quotes)
-    question = question.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
-    correctAnswer = correctAnswer.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
+    // 4. Cleanup HTML entities for Question
+    question = question.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').replace(/\s+/g, ' ').trim();
 
     results.push({
       question: question,
