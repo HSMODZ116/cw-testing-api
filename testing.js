@@ -89,7 +89,7 @@ async function scrapeTelenorQuiz(dateQuery) {
   const html = await response.text();
   const results = [];
 
-  // 1. HTML ko Sirf 5 Question Blocks mein todna using 'Question X:'
+  // 1. Extract all 5 question blocks perfectly
   const questionLabels = ['Question 1', 'Question 2', 'Question 3', 'Question 4', 'Question 5'];
   
   for (let i = 0; i < questionLabels.length; i++) {
@@ -103,50 +103,43 @@ async function scrapeTelenorQuiz(dateQuery) {
     
     let blockHtml = html.substring(startIndex, endIndex);
 
-    // 2. Extract Clean Question (Remove Options)
+    // 2. Extract Clean Question
     let question = `Question ${i+1}:`;
+    // Keep only the text until we hit an HTML tag like <br> or <p>
     let questionTextMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+)/);
     if (questionTextMatch && questionTextMatch[1]) {
         question = "Question " + (i+1) + ": " + questionTextMatch[1].trim();
     }
 
-    // 3. Extract Correct Answer (FIX: Target Green Button and its immediate text)
+    // 3. FIX: EXACT STRATEGY FOR GREEN BUTTON
+    // Pehla "kt-adv-heading" = Label "Answer"
+    // Doosra "kt-adv-heading" (or Last) = Green Button ka exact text
     let correctAnswer = "Answer not found";
     
-    // Tareeqa: Green button (background-color: #24ff2a) ke baad ka text uthana.
-    // Q1/Q2 answers were inside the button, Q3/Q4/Q5 answers are RIGHT NEXT to the green label.
+    // Regex to find ALL instances of the class in this block
+    const allMatches = [...blockHtml.matchAll(/class="[^"]*kt-adv-heading[^"]*"[^>]*>([^<]*(?:<strong>([^<]+)<\/strong>)?[^<]*)</gi)];
     
-    // Match pattern: Green button class ko dhoondho, phir text extract karo jo style ke baad aata hai.
-    const greenBtnMatch = blockHtml.match(/class="[^"]*kt-adv-heading[^"]*"[^>]*style="[^"]*background(?:-color)?:\s*#24ff2a[^"]*"[^>]*>[\s\S]*?>(.*?)<\//i);
-    
-    if (greenBtnMatch && greenBtnMatch[1]) {
-        let ans = greenBtnMatch[1].trim();
-        // Agar text "Answer" ya "<strong>Answer" hai, toh reject karo
-        if(ans.includes('Answer') === false) {
-            correctAnswer = ans;
-        } else {
-            // Agar mila "<strong>Answer", toh hum Green button ke 'next sibling' ki text uthayenge.
-            // Isko simple tarike se karne ke liye hum agle paragraph ko uthayenge.
-            const afterGreenBtnMatch = blockHtml.match(/<p[^>]*>\s*<strong>([^<]+)<\/strong>\s*<\/p>/g);
-            if (afterGreenBtnMatch) {
-                // Regex se pehla strong text nikaalo
-                const finalMatch = afterGreenBtnMatch[afterGreenBtnMatch.length-1].match(/<strong>([^<]+)<\/strong>/);
-                if (finalMatch) correctAnswer = finalMatch[1].trim();
-            }
+    if (allMatches.length > 0) {
+        // HUMESHA LAST WALA MATCH LO (Wohi Green Button hoga)
+        const lastMatch = allMatches[allMatches.length - 1];
+        let ans = lastMatch[1].trim();
+        
+        // Agar <strong> ke andar hai, toh usko uthao (Q2 style)
+        if (lastMatch[2]) {
+            ans = lastMatch[2].trim();
         }
-    }
-    
-    // Agar strong tag ke bina ho to (Q1,Q2 style)
-    if (correctAnswer === "Answer not found") {
-        const directMatch = blockHtml.match(/<p[^>]*class="[^"]*kt-adv-heading[^"]*"[^>]*>([^<]+)<\/p>/i);
-        if (directMatch && directMatch[1] && directMatch[1].toLowerCase() !== 'answer') {
-            correctAnswer = directMatch[1].trim();
+
+        // Cleanup
+        ans = ans.replace(/<[^>]*>|&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
+        
+        // Filter reject "Answer" label
+        if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
+            correctAnswer = ans;
         }
     }
 
-    // 4. Clean up HTML entities (Remove quotes and tags)
+    // 4. Clean up Question text as well
     question = question.replace(/<[^>]*>|&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
-    correctAnswer = correctAnswer.replace(/<[^>]*>|&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
 
     results.push({
       question: question,
