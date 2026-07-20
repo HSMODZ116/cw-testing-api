@@ -87,10 +87,9 @@ async function scrapeTelenorQuiz(dateQuery) {
   }
 
   const html = await response.text();
-
   const results = [];
 
-  // 1. Split HTML into Question Blocks
+  // 1. Split into Question Blocks
   const questionLabels = ['Question 1', 'Question 2', 'Question 3', 'Question 4', 'Question 5'];
   
   for (let i = 0; i < questionLabels.length; i++) {
@@ -100,28 +99,36 @@ async function scrapeTelenorQuiz(dateQuery) {
     let startIndex = html.indexOf(currentLabel);
     let endIndex = nextLabel ? html.indexOf(nextLabel, startIndex + 1) : html.length;
     
+    // Safety to cut off FAQs from Q5 block
+    if (i === 4) {
+        const faqsIndex = html.indexOf('FAQs', startIndex);
+        if (faqsIndex !== -1 && faqsIndex < endIndex) {
+            endIndex = faqsIndex;
+        }
+    }
+
     if (startIndex === -1) continue;
     
     let blockHtml = html.substring(startIndex, endIndex);
 
-    // 2. Extract Clean Question (Remove Options)
+    // 2. Extract Clean Question (Stop at Options)
     let question = `Question ${i+1}:`;
     let qMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+)/i);
     if (qMatch && qMatch[1]) {
         question = "Question " + (i+1) + ": " + qMatch[1].trim();
     }
 
-    // 3. EXACT GREEN BUTTON EXTRACTION (FINAL FIX)
+    // 3. EXACT GREEN BUTTON EXTRACTION (WITHOUT `-color`)
     let correctAnswer = "Answer not found";
 
-    // Step A: Dhoondho Green button ka exact style
-    const greenStyleIndex = blockHtml.indexOf('background-color: #24ff2a');
+    // Step A: Dhoondho exact CSS (background: #24ff2a)
+    const greenStyleIndex = blockHtml.indexOf('background: #24ff2a');
     
     if (greenStyleIndex !== -1) {
-        // Step B: Style se pehle wala 'class="' ka start index dhoondho
+        // Step B: Style ke pehle wala 'class="' ka start index
         const classStartIndex = blockHtml.lastIndexOf('class="', greenStyleIndex);
         if (classStartIndex !== -1) {
-            // Step C: Us class ka closing tag '>' dhoondho
+            // Step C: Us class ka closing tag '>'
             const tagEndIndex = blockHtml.indexOf('>', classStartIndex);
             if (tagEndIndex !== -1) {
                 // Step D: Text extract karo (> ke baad aur < se pehle)
@@ -129,14 +136,26 @@ async function scrapeTelenorQuiz(dateQuery) {
                 const textEnd = blockHtml.indexOf('<', textStart);
                 
                 if (textStart !== -1 && textEnd !== -1) {
-                    // Step E: Raw Text nikalo
                     let extracted = blockHtml.substring(textStart, textEnd).trim();
-                    
-                    // Step F: Clean karo HTML entities aur tags
                     extracted = extracted.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
                     
-                    // Step G: FILTER OUT THE "Answer" LABEL
-                    if (extracted.toLowerCase() !== 'answer' && extracted.length > 0 && extracted.length < 200) {
+                    // Step E: Agar extracted text "Answer" hai, toh usko skip karo aur next ka dhoondo
+                    if (extracted.toLowerCase() === 'answer') {
+                        // Q3, Q4, Q5 ke liye: Green button ke baad wala agla text uthao
+                        const afterBtnIndex = blockHtml.indexOf('">', textEnd);
+                        if (afterBtnIndex !== -1) {
+                            const nextTextStart = afterBtnIndex + 2; // after '">'
+                            const nextTextEnd = blockHtml.indexOf('<', nextTextStart);
+                            if (nextTextStart !== -1 && nextTextEnd !== -1) {
+                                let nextExtracted = blockHtml.substring(nextTextStart, nextTextEnd).trim();
+                                nextExtracted = nextExtracted.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
+                                if (nextExtracted.length > 0 && nextExtracted.length < 200) {
+                                    correctAnswer = nextExtracted;
+                                }
+                            }
+                        }
+                    } else if (extracted.length > 0 && extracted.length < 200) {
+                        // Q1, Q2, Q5 (jo direct text hai)
                         correctAnswer = extracted;
                     }
                 }
@@ -144,7 +163,7 @@ async function scrapeTelenorQuiz(dateQuery) {
         }
     }
 
-    // 4. Final Cleanup (Remove extra spaces and HTML entities)
+    // 4. Final Cleanup
     question = question.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
     correctAnswer = correctAnswer.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
 
