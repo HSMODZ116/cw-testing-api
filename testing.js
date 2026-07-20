@@ -87,6 +87,7 @@ async function scrapeTelenorQuiz(dateQuery) {
   }
 
   const html = await response.text();
+
   const results = [];
 
   // 1. Split into Question Blocks safely
@@ -110,34 +111,32 @@ async function scrapeTelenorQuiz(dateQuery) {
         question = "Question " + (i+1) + ": " + qMatch[1].trim();
     }
 
-    // 3. THE ULTIMATE FIX (Slice and Extract)
+    // 3. THE ULTIMATE FIX (Exact Match of Green Background)
     let correctAnswer = "Answer not found";
 
-    // Step A: Find the Green Button (style contains #24ff2a) ka exact start index
-    const greenStyleIndex = blockHtml.indexOf('background:#24ff2a');
+    // Step A: Dhoondho exact 'background-color: #24ff2a'
+    const greenStyleIndex = blockHtml.indexOf('background-color: #24ff2a');
+    
     if (greenStyleIndex !== -1) {
-        // Step B: Pehle uss Green button ke pura HTML block ko dhoondho (class="kt-adv-heading" se lekar > tak)
-        // Class ka start dhoondho jo green style se pehle aata hai
+        // Step B: Us style se pehle wala 'class="' ka start index dhoondho
         const classStartIndex = blockHtml.lastIndexOf('class="', greenStyleIndex);
         if (classStartIndex !== -1) {
-            // Uss class ka end index dhoondho (Tag close karta hai >)
+            // Step C: Us class ka closing tag '>' dhoondho
             const tagEndIndex = blockHtml.indexOf('>', classStartIndex);
             if (tagEndIndex !== -1) {
                 
-                // Step C: Tag ke andar ka text extract karo (> ke baad aur < se pehle)
+                // Step D: Text extract karo (> ke baad aur < se pehle)
                 const textStart = tagEndIndex + 1;
                 const textEnd = blockHtml.indexOf('<', textStart);
                 
                 if (textStart !== -1 && textEnd !== -1) {
-                    // Step D: Raw Text nikalo
+                    // Step E: Raw Text nikalo
                     let extracted = blockHtml.substring(textStart, textEnd).trim();
                     
-                    // Step E: Clean karo HTML entities aur tags
+                    // Step F: Clean karo HTML entities aur tags
                     extracted = extracted.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
                     
-                    // Step F: FILTER OUT THE "Answer" LABEL
-                    // Agar extracted text "Answer" hai, toh reject kar do. 
-                    // Jo bachega, woh Correct Answer hoga.
+                    // Step G: FILTER OUT THE "Answer" LABEL
                     if (extracted.toLowerCase() !== 'answer' && extracted.length > 0 && extracted.length < 200) {
                         correctAnswer = extracted;
                     }
@@ -146,7 +145,7 @@ async function scrapeTelenorQuiz(dateQuery) {
         }
     }
 
-    // 4. Final Cleanup (Remove extra spaces)
+    // 4. Final Cleanup
     question = question.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
     correctAnswer = correctAnswer.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
 
