@@ -46,7 +46,7 @@ export default {
     } catch (error) {
       return jsonResponse({
         success: false,
-        error: "Scraping failed.",
+        error: "Scraping failed. Check date format or target site.",
         details: error.message
       }, 500);
     }
@@ -67,7 +67,7 @@ async function scrapeTelenorQuiz(dateQuery) {
   // Homepage par request bhejein
   const TARGET_URL = `https://telenorquiztodays.pk/`;
   
-  // Cookies (From Screenshot)
+  // ✅ EXACT COOKIES FROM YOUR SCREENSHOT (Cloudflare Bypass)
   const cookies = [
     "_ga=GA1.1.2137942815.1784559948;",
     "_ga_5FRVYN66BF=GS2.1.1784559947.1.0.1784559956.0.0.0;",
@@ -75,7 +75,7 @@ async function scrapeTelenorQuiz(dateQuery) {
   ].join(' ');
 
   const headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Cache-Control": "max-age=0",
@@ -90,44 +90,46 @@ async function scrapeTelenorQuiz(dateQuery) {
 
   const html = await response.text();
 
-  // ---------- FIXED PARSING LOGIC ----------
+  // ---------- PARSING LOGIC (CSS Garbage Removed) ----------
   const results = [];
 
-  // Loop 5 times for 5 questions
-  for (let i = 1; i <= 5; i++) {
-    
-    // 1. Extract Question Text
-    // Search for "Question i:" followed by text until a newline or < symbol
-    const qRegex = new RegExp(`Question\\s*${i}:\\s*([^<]+)`, 'i');
-    const qMatch = html.match(qRegex);
-    const questionText = qMatch ? qMatch[1].trim() : `Question ${i} Not Found`;
-
-    // 2. Extract Correct Answer (Green Button)
-    // The correct answer is always inside a div with background-color: #24ff2a
-    // We find the Answer for the current question by looking at the answer blocks sequentially
-    // or by grabbing all green blocks and picking the one matching the question index.
-    
-    // To be safe, we find ALL green answer blocks in the entire HTML
-    const greenBlocks = html.match(/background-color:\s*#24ff2a[^>]*>([^<]+)<\//gi);
-    
-    let correctAnswer = "Answer not found";
-    
-    if (greenBlocks && greenBlocks.length >= i) {
-      // Clean the specific block for Question 'i'
-      correctAnswer = greenBlocks[i-1]
-        .replace(/background-color:\s*#24ff2a[^>]*>/, '') // Remove the style part
-        .replace(/<\/?[^>]+(>|$)/g, "")                  // Remove any leftover tags
-        .trim();
+  // 1. Regex to find ALL "Answer" green boxes. 
+  // We look for <p> tags that have class="kt-adv-heading..." and contain the green background style
+  // AND we only capture text that is NOT CSS code (text length < 200 characters)
+  const greenBlockRegex = /<p[^>]*class="kt-adv-heading[^"]*"[^>]*>[^<]*<strong>([^<]+)<\/strong><\/p>/g;
+  
+  let match;
+  let answersFound = [];
+  
+  // Loop through all green answer blocks
+  while ((match = greenBlockRegex.exec(html)) !== null) {
+    let answer = match[1].trim();
+    // Remove any leftover HTML entities
+    answer = answer.replace(/&nbsp;/g, ' ').trim();
+    // Ignore if the captured text is too long (CSS code)
+    if (answer.length > 0 && answer.length < 200) {
+      answersFound.push(answer);
     }
+  }
 
-    // Clean up answer string
-    if (correctAnswer.includes('&nbsp;')) {
-      correctAnswer = correctAnswer.replace(/&nbsp;/g, ' ').trim();
+  // 2. Extract ALL Question texts
+  const questionRegex = /<strong>Question\s*\d+:[\s\S]*?<[^>]*>([^<]+)<\//g;
+  let qMatch;
+  let questionsFound = [];
+
+  while ((qMatch = questionRegex.exec(html)) !== null) {
+    let question = qMatch[1].trim();
+    // Filter out "Answer" or extra bold texts
+    if (question.length > 10 && !question.includes('Answer')) {
+      questionsFound.push(question);
     }
+  }
 
+  // 3. Map questions to answers (First 5 matches)
+  for (let i = 0; i < 5; i++) {
     results.push({
-      question: questionText,
-      correctAnswer: correctAnswer
+      question: questionsFound[i] || `Question ${i+1} Not Found`,
+      correctAnswer: answersFound[i] || "Answer not found in this block"
     });
   }
 
