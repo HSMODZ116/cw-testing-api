@@ -64,13 +64,13 @@ function jsonResponse(data, status = 200) {
 }
 
 async function scrapeTelenorQuiz(dateQuery) {
-  const TARGET_URL = `https://mytelenoranswertoday.pk/`;
+  const TARGET_URL = `https://wikitechlibrary.com/today-telenor-quiz-answers/`;
   
-  // Cookies (From DevTools Screenshots)
+  // Cookies (From DevTools Screenshot)
   const cookies = [
-    "_ga=GA1.1.1649597395.1784556291;",
-    "_ga_GS8LVG5EDC=GS2.1.1784640995.4.0.1784641040.0.0.0;",
-    "__cf_bm=5FJwBp2V8NzK9HwWpLQTCg53PMHZ8wPcWXWm1K0H72mXY-1784640996-1.0.1.1-tv0u1aRfJXgE9.5Z4AQd6i3dZoc_K.BESrW8Cmaay0;"
+    "_ga=GA1.1.817417446.1784556439;",
+    "_ga_GS3JBW98QMB=GS2.1.1784640421.3.0.1784640460.0.0.0;",
+    "__cf_bm=t.GBiW7dGBk6_ESU7rYBRxfBhKLGQRKkmJ1sYdqHqXGk-1784640439-1.0.1.1-uCl_j3P6FvUpd.kxyqo_m3spPjCQNy.yK9Sm77RrbcWd0Wc.xBvSnr37OeUjvEENubDnp0jrmbQaFniJbp4Y6Q"
   ].join(' ');
 
   const headers = {
@@ -100,8 +100,8 @@ async function scrapeTelenorQuiz(dateQuery) {
     let startIndex = html.indexOf(currentLabel);
     let endIndex = nextLabel ? html.indexOf(nextLabel, startIndex + 1) : html.length;
     
-    // Safety: Cut off extra content
-    const extraCutoffIndex = html.indexOf('Video Guide', startIndex);
+    // Safety: Cut off extra content after Question 5
+    const extraCutoffIndex = html.indexOf('Quiz Rules', startIndex);
     if (extraCutoffIndex !== -1 && extraCutoffIndex < endIndex && i === 4) {
         endIndex = extraCutoffIndex;
     }
@@ -110,63 +110,48 @@ async function scrapeTelenorQuiz(dateQuery) {
     
     let blockHtml = html.substring(startIndex, endIndex);
 
-    // 2. Extract Clean Question (Remove Options)
+    // 2. Extract Clean Question (Remove "Question 1: " prefix)
     let question = `Question ${i+1}:`;
-    // FIX: Question ke baad "&nbsp;" ko bhi ignore karo
-    let qMatch = blockHtml.match(/Question\s*\d+:\s*(?:&nbsp;|\s)*([^<>\n]+?)(?=\s*<br)/i);
+    let qMatch = blockHtml.match(/<h3[^>]*>(.*?)<\/h3>/i);
     if (qMatch && qMatch[1]) {
-        question = "Question " + (i+1) + ": " + qMatch[1].trim();
+        let raw = qMatch[1].replace(/<[^>]*>/g, '').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
+        question = "Question " + (i+1) + ": " + raw;
     }
 
-    // 3. Extract Correct Answer (Target EXACT Green Button Class)
+    // 3. Extract Correct Answer (Target EXACT Green Box Class)
     let correctAnswer = "Answer not found";
 
-    // Step A: Search for the exact Green Button Class ID
-    const greenBtnClass = 'class="kt-adv-heading11_549588-20"';
-    const greenBtnIndex = blockHtml.indexOf(greenBtnClass);
+    // Step A: Search for the exact Green Box Class: "answer1"
+    // This class is used for the correct answer boxes
+    const answerBoxClass = 'class="answer1"';
+    const answerBoxIndex = blockHtml.indexOf(answerBoxClass);
     
-    if (greenBtnIndex !== -1) {
-        // Step B: Class ke andar ka HTML content uthana
-        const closeTagIndex = blockHtml.indexOf('>', greenBtnIndex);
-        if (closeTagIndex !== -1) {
-            const contentStart = closeTagIndex + 1;
-            const contentEnd = blockHtml.indexOf('<', contentStart);
-            
-            if (contentStart !== -1 && contentEnd !== -1) {
-                // Step C: Extract entire inner HTML (including nested tags)
-                let extractedHtml = blockHtml.substring(contentStart, contentEnd).trim();
+    if (answerBoxIndex !== -1) {
+        // Step B: Find the start of the text inside the class
+        const contentStart = blockHtml.indexOf('>', answerBoxIndex) + 1;
+        if (contentStart !== -1) {
+            // Step C: Find the end of the text (next closing tag)
+            const contentEnd = blockHtml.indexOf('</div>', contentStart);
+            if (contentEnd !== -1) {
+                let rawText = blockHtml.substring(contentStart, contentEnd).trim();
                 
-                // Step D: Remove ALL HTML tags (strong, p, br, etc.)
-                let extracted = extractedHtml.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
+                // Step D: Clean up HTML tags and entities
+                rawText = rawText.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
                 
-                // Step E: Agar "Answer" mila, toh uske baad wala agla <p> tag uthao
-                if (extracted.toLowerCase() === 'answer') {
-                    // Dhoondho uske baad wala agla <p> tag (Real Answer)
-                    const pTagStart = blockHtml.indexOf('<p', contentEnd);
-                    if (pTagStart !== -1) {
-                        const pTextStart = blockHtml.indexOf('>', pTagStart) + 1;
-                        const pTextEnd = blockHtml.indexOf('</p>', pTextStart);
-                        if (pTextStart !== -1 && pTextEnd !== -1) {
-                            let realAnswer = blockHtml.substring(pTextStart, pTextEnd).trim();
-                            // Remove <strong> if it's inside
-                            realAnswer = realAnswer.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
-                            
-                            if (realAnswer.length > 0 && realAnswer.length < 200) {
-                                correctAnswer = realAnswer;
-                            }
-                        }
-                    }
-                } else if (extracted.length > 0 && extracted.length < 200) {
-                    // Agar "Answer" label nahi hai, toh seedha text uthao
-                    correctAnswer = extracted;
+                // Step E: Remove "Answer:" prefix if it exists
+                let cleanAnswer = rawText.replace(/^Answer:\s*/i, '').trim();
+                
+                // Step F: Validate
+                if (cleanAnswer.length > 0 && cleanAnswer.length < 200) {
+                    correctAnswer = cleanAnswer;
                 }
             }
         }
     }
 
-    // 4. Final Cleanup
-    question = question.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
-    correctAnswer = correctAnswer.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
+    // 4. Final Cleanup (Remove extra spaces and quotes)
+    question = question.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').replace(/\s+/g, ' ').trim();
+    correctAnswer = correctAnswer.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').replace(/\s+/g, ' ').trim();
 
     results.push({
       question: question,
