@@ -112,8 +112,8 @@ async function scrapeTelenorQuiz(dateQuery) {
 
     // 2. Extract Clean Question (Remove Options)
     let question = `Question ${i+1}:`;
-    // FIX: Question ke baad "<br" tak rukna, lekin aur chars uthane ke liye [^<>\n]+? use kiya
-    let qMatch = blockHtml.match(/Question\s*\d+:\s*([^<>\n]+?)(?=\s*<br)/i);
+    // FIX: Question ke baad "&nbsp;" ko bhi ignore karo
+    let qMatch = blockHtml.match(/Question\s*\d+:\s*(?:&nbsp;|\s)*([^<>\n]+?)(?=\s*<br)/i);
     if (qMatch && qMatch[1]) {
         question = "Question " + (i+1) + ": " + qMatch[1].trim();
     }
