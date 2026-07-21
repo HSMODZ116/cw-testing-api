@@ -100,49 +100,72 @@ async function scrapeTelenorQuiz(dateQuery) {
     let startIndex = html.indexOf(currentLabel);
     let endIndex = nextLabel ? html.indexOf(nextLabel, startIndex + 1) : html.length;
     
+    // Safety: Cut off extra content like FAQs from Q5 block
+    const faqsIndex = html.indexOf('FAQs', startIndex);
+    if (faqsIndex !== -1 && faqsIndex < endIndex) {
+        endIndex = faqsIndex;
+    }
+
     if (startIndex === -1) continue;
     
     let blockHtml = html.substring(startIndex, endIndex);
 
-    // 2. Extract Question
+    // 2. Extract Clean Question
     let question = `Question ${i+1}:`;
-    let questionTextMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+)/);
-    if (questionTextMatch && questionTextMatch[1]) {
-        question = "Question " + (i+1) + ": " + questionTextMatch[1].trim();
+    let qMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+?)(?=\s*<br\s*\/?>|\s*<p|\s*<ul|\s*<strong)/i);
+    if (qMatch && qMatch[1]) {
+        question = "Question " + (i+1) + ": " + qMatch[1].trim();
     }
 
-    // 3. Extract Correct Answer (Green Button ka text) - FIXED STRATEGY
-    // HTML me Green button layout kuch aisa hai: <p class="kt-adv..."> TEXT </p> ya <strong> TEXT </strong>
+    // 3. EXTRACT CORRECT ANSWER (FINAL, PERFECT LOGIC)
     let correctAnswer = "Answer not found";
+
+    // LAYER 1: Search for the EXACT Green Button Class used in Q3, Q4, Q5
+    const greenBtnClass = 'class="kt-adv-heading14_b823be-d9"';
+    const greenBtnIndex = blockHtml.indexOf(greenBtnClass);
     
-    // Strategy 1: Pehle dhoondho <p class="...kt-adv-heading..."> ke andar koi bhi text
-    // "> ke baad text aata hai jab tak < na aa jaye
-    // (?:<strong>)?(.*?)(?:<\/strong>)? -> Ye optional strong tags ko handle karta hai
-    const paragraphMatch = blockHtml.match(/class="[^"]*kt-adv-heading[^"]*"[^>]*>[\s\S]*?(?:<strong>)?(.*?)(?:<\/strong>)?(?=\s*<\/p>|<br)/i);
-    
-    if (paragraphMatch && paragraphMatch[1]) {
-        let ans = paragraphMatch[1].trim();
-        // Ignore karain agar answer "Answer" hai, kyunke q1, q3 me label "Answer" bhi hai
-        if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
-            correctAnswer = ans;
+    if (greenBtnIndex !== -1) {
+        // Extract text inside the tag
+        const closeTagIndex = blockHtml.indexOf('>', greenBtnIndex);
+        if (closeTagIndex !== -1) {
+            const contentStart = closeTagIndex + 1;
+            const contentEnd = blockHtml.indexOf('<', contentStart);
+            
+            if (contentStart !== -1 && contentEnd !== -1) {
+                let extractedHtml = blockHtml.substring(contentStart, contentEnd).trim();
+                let extracted = extractedHtml.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
+                
+                if (extracted.toLowerCase() !== 'answer' && extracted.length > 0 && extracted.length < 200) {
+                    correctAnswer = extracted;
+                }
+            }
         }
     }
 
-    // Strategy 2: Agar upar se kuch nahi mila, to <strong> dhoondho (fallback for Q2)
-    if(correctAnswer === "Answer not found") {
-      const strongMatch = blockHtml.match(/<strong>([^<]+)<\/strong>/i);
-      if (strongMatch && strongMatch[1]) {
-          let ans = strongMatch[1].trim();
-          if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
-              correctAnswer = ans;
-          }
-      }
+    // LAYER 2: If exact class fails, try finding <strong> (Fixes Q2 and Q1)
+    if (correctAnswer === "Answer not found") {
+        const strongMatch = blockHtml.match(/<strong>([^<]+)<\/strong>/i);
+        if (strongMatch && strongMatch[1]) {
+            let ans = strongMatch[1].trim();
+            if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
+                correctAnswer = ans;
+            }
+        }
     }
 
-    // 4. Clean up HTML entities (yeh saare &nbsp; aur quote mark hata dega)
-    // Pehle question ko clear karo
+    // LAYER 3: If both fail, try the generic "kt-adv-heading" class (Fallback)
+    if (correctAnswer === "Answer not found") {
+        const genericMatch = blockHtml.match(/class="[^"]*kt-adv-heading[^"]*"[^>]*>[\s\S]*?(?:<strong>)?(.*?)(?:<\/strong>)?(?=\s*<\/p>|<br)/i);
+        if (genericMatch && genericMatch[1]) {
+            let ans = genericMatch[1].trim();
+            if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
+                correctAnswer = ans;
+            }
+        }
+    }
+
+    // 4. Clean up HTML entities for final output
     question = question.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
-    // Phir answer ko clear karo
     correctAnswer = correctAnswer.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
 
     results.push({
