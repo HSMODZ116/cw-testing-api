@@ -112,8 +112,8 @@ async function scrapeTelenorQuiz(dateQuery) {
 
     // 2. Extract Clean Question (Remove Options)
     let question = `Question ${i+1}:`;
-    // FIX: Question ke baad "<br />" tak rukna (Options se pehle)
-    let qMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+?)(?=\s*<br\s*\/?>)/i);
+    // FIX: Question ke baad "<span" tak rukna (Options aur <br> se pehle)
+    let qMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+?)(?=\s*<span\s*)/i);
     if (qMatch && qMatch[1]) {
         question = "Question " + (i+1) + ": " + qMatch[1].trim();
     }
@@ -126,25 +126,28 @@ async function scrapeTelenorQuiz(dateQuery) {
     const greenBtnIndex = blockHtml.indexOf(greenBtnClass);
     
     if (greenBtnIndex !== -1) {
-        // Step B: Class ke andar ka text uthana
+        // Step B: Class ke andar ka HTML content uthana
         const closeTagIndex = blockHtml.indexOf('>', greenBtnIndex);
         if (closeTagIndex !== -1) {
-            const textStart = closeTagIndex + 1;
-            const textEnd = blockHtml.indexOf('<', textStart);
+            const contentStart = closeTagIndex + 1;
+            const contentEnd = blockHtml.indexOf('<', contentStart);
             
-            if (textStart !== -1 && textEnd !== -1) {
-                let extracted = blockHtml.substring(textStart, textEnd).trim();
-                extracted = extracted.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
+            if (contentStart !== -1 && contentEnd !== -1) {
+                // Step C: Extract entire inner HTML (including nested tags)
+                let extractedHtml = blockHtml.substring(contentStart, contentEnd).trim();
                 
-                // Step C: Agar "Answer" mila, toh uske baad wala agla tag uthao
+                // Step D: Remove ALL HTML tags (strong, p, br, etc.)
+                let extracted = extractedHtml.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
+                
+                // Step E: Agar "Answer" mila, toh uske baad wala agla <p> tag uthao
                 if (extracted.toLowerCase() === 'answer') {
-                    // Dhoondho uske baad wala agla tag (Real Answer)
-                    const nextTagStart = blockHtml.indexOf('<strong>', textEnd);
-                    if (nextTagStart !== -1) {
-                        const nextTextStart = blockHtml.indexOf('>', nextTagStart) + 1;
-                        const nextTextEnd = blockHtml.indexOf('</strong>', nextTextStart);
-                        if (nextTextStart !== -1 && nextTextEnd !== -1) {
-                            let realAnswer = blockHtml.substring(nextTextStart, nextTextEnd).trim();
+                    // Dhoondho uske baad wala agla <p> tag (Real Answer)
+                    const pTagStart = blockHtml.indexOf('<p', textEnd);
+                    if (pTagStart !== -1) {
+                        const pTextStart = blockHtml.indexOf('>', pTagStart) + 1;
+                        const pTextEnd = blockHtml.indexOf('</p>', pTextStart);
+                        if (pTextStart !== -1 && pTextEnd !== -1) {
+                            let realAnswer = blockHtml.substring(pTextStart, pTextEnd).trim();
                             realAnswer = realAnswer.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
                             
                             if (realAnswer.length > 0 && realAnswer.length < 200) {
@@ -153,7 +156,7 @@ async function scrapeTelenorQuiz(dateQuery) {
                         }
                     }
                 } else if (extracted.length > 0 && extracted.length < 200) {
-                    // Agar "Answer" label nahi hai, toh seedha text uthao (Q2 style)
+                    // Agar "Answer" label nahi hai, toh seedha text uthao
                     correctAnswer = extracted;
                 }
             }
