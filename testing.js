@@ -112,8 +112,8 @@ async function scrapeTelenorQuiz(dateQuery) {
 
     // 2. Extract Clean Question (Remove Options)
     let question = `Question ${i+1}:`;
-    // FIX: Question ke baad "<span" tak rukna (Options aur <br> se pehle)
-    let qMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+?)(?=\s*<span\s*)/i);
+    // FIX: Question ke baad "<br" tak rukna, lekin aur chars uthane ke liye [^<>\n]+? use kiya
+    let qMatch = blockHtml.match(/Question\s*\d+:\s*([^<>\n]+?)(?=\s*<br)/i);
     if (qMatch && qMatch[1]) {
         question = "Question " + (i+1) + ": " + qMatch[1].trim();
     }
@@ -142,12 +142,13 @@ async function scrapeTelenorQuiz(dateQuery) {
                 // Step E: Agar "Answer" mila, toh uske baad wala agla <p> tag uthao
                 if (extracted.toLowerCase() === 'answer') {
                     // Dhoondho uske baad wala agla <p> tag (Real Answer)
-                    const pTagStart = blockHtml.indexOf('<p', textEnd);
+                    const pTagStart = blockHtml.indexOf('<p', contentEnd);
                     if (pTagStart !== -1) {
                         const pTextStart = blockHtml.indexOf('>', pTagStart) + 1;
                         const pTextEnd = blockHtml.indexOf('</p>', pTextStart);
                         if (pTextStart !== -1 && pTextEnd !== -1) {
                             let realAnswer = blockHtml.substring(pTextStart, pTextEnd).trim();
+                            // Remove <strong> if it's inside
                             realAnswer = realAnswer.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
                             
                             if (realAnswer.length > 0 && realAnswer.length < 200) {
