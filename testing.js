@@ -66,6 +66,7 @@ function jsonResponse(data, status = 200) {
 async function scrapeTelenorQuiz(dateQuery) {
   const TARGET_URL = `https://telenorquiztodays.pk/`;
   
+  // Cookies (From Screenshot)
   const cookies = [
     "_ga=GA1.1.2137942815.1784559948;",
     "_ga_5FRVYN66BF=GS2.1.1784559947.1.0.1784559956.0.0.0;",
@@ -90,60 +91,50 @@ async function scrapeTelenorQuiz(dateQuery) {
 
   const results = [];
 
-  // 1. HTML ko 5 Question Blocks mein todna
-  const questionLabels = ['Question 1', 'Question 2', 'Question 3', 'Question 4', 'Question 5'];
+  // ---- FIX: Pure Regex Approach (No DOMParser) ----
   
-  for (let i = 0; i < questionLabels.length; i++) {
-    const currentLabel = questionLabels[i];
-    const nextLabel = i < questionLabels.length - 1 ? questionLabels[i + 1] : null;
-    
-    let startIndex = html.indexOf(currentLabel);
-    let endIndex = nextLabel ? html.indexOf(nextLabel, startIndex + 1) : html.length;
-    
-    if (startIndex === -1) continue;
-    
-    let blockHtml = html.substring(startIndex, endIndex);
+  // 1. HTML ko Question blocks mein todna.
+  // Regex: "Question X:" se start karo, aur "Question Y:" (next) ya "Video Guide" tak khatam karo.
+  const blocks = html.match(/Question \d+?:[\s\S]*?(?=(Question \d+?:|Video Guide|$))/gi);
 
-    // 2. Extract Question
-    let question = `Question ${i+1}:`;
-    let questionTextMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+)/);
-    if (questionTextMatch && questionTextMatch[1]) {
-        question = "Question " + (i+1) + ": " + questionTextMatch[1].trim();
-    }
+  if (!blocks) {
+    return results;
+  }
 
-    // 3. Extract Correct Answer (Green Button ka text) - FIXED STRATEGY
-    // HTML me Green button layout kuch aisa hai: <p class="kt-adv..."> TEXT </p> ya <strong> TEXT </strong>
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    
+    // 2. Question text nikaalna (HTML tags hata kar)
+    let question = block.replace(/<[^>]*>/g, ' ') // Tags hatao
+                        .replace(/\s+/g, ' ')     // Extra spaces hatao
+                        .trim();
+    // Sirf first line (Question) rukne ke liye
+    question = question.split('\n')[0].trim();
+
+    // 3. CORRECT ANSWER extract karna (Green Button)
     let correctAnswer = "Answer not found";
     
-    // Strategy 1: Pehle dhoondho <p class="...kt-adv-heading..."> ke andar koi bhi text
-    // "> ke baad text aata hai jab tak < na aa jaye
-    // (?:<strong>)?(.*?)(?:<\/strong>)? -> Ye optional strong tags ko handle karta hai
-    const paragraphMatch = blockHtml.match(/class="[^"]*kt-adv-heading[^"]*"[^>]*>[\s\S]*?(?:<strong>)?(.*?)(?:<\/strong>)?(?=\s*<\/p>|<br)/i);
+    // Important: Green button ke andar <strong>Text</strong> hota hai.
+    // Hum regex mein "kt-adv-heading" class dhoondhenge aur uske andar ka <strong> text uthayenge.
+    // Pattern: class="...kt-adv-heading..." ke baad kuch bhi, phir <strong>TEXT</strong>
+    const answerMatch = block.match(/class="[^"]*kt-adv-heading[^"]*"[^>]*>[\s\S]*?<strong>([^<]+)<\/strong>/i);
     
-    if (paragraphMatch && paragraphMatch[1]) {
-        let ans = paragraphMatch[1].trim();
-        // Ignore karain agar answer "Answer" hai, kyunke q1, q3 me label "Answer" bhi hai
-        if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
-            correctAnswer = ans;
+    if (answerMatch && answerMatch[1]) {
+      correctAnswer = answerMatch[1].trim();
+    } 
+    // Fallback: Agar <strong> ke bina ho to direct text le lo
+    else {
+      const fallbackMatch = block.match(/class="[^"]*kt-adv-heading[^"]*"[^>]*>([^<]+)<\//i);
+      if (fallbackMatch && fallbackMatch[1]) {
+        let ans = fallbackMatch[1].trim();
+        if (ans !== "Answer" && ans.length > 2) {
+          correctAnswer = ans;
         }
-    }
-
-    // Strategy 2: Agar upar se kuch nahi mila, to <strong> dhoondho (fallback for Q2)
-    if(correctAnswer === "Answer not found") {
-      const strongMatch = blockHtml.match(/<strong>([^<]+)<\/strong>/i);
-      if (strongMatch && strongMatch[1]) {
-          let ans = strongMatch[1].trim();
-          if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
-              correctAnswer = ans;
-          }
       }
     }
 
-    // 4. Clean up HTML entities (yeh saare &nbsp; aur quote mark hata dega)
-    // Pehle question ko clear karo
-    question = question.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
-    // Phir answer ko clear karo
-    correctAnswer = correctAnswer.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
+    // HTML entities clean karna (e.g., &nbsp; and &#8220;)
+    correctAnswer = correctAnswer.replace(/&nbsp;/g, ' ').replace(/&#8220;|&#8221;|&ldquo;|&rdquo;/g, '"');
 
     results.push({
       question: question,
