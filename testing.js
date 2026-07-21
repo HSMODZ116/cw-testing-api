@@ -136,13 +136,13 @@ async function scrapeTelenorQuiz(dateQuery) {
                 let extracted = blockHtml.substring(textStart, textEnd).trim();
                 extracted = extracted.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
                 
-                // Step C: Agar "Answer" mila, toh uske baad wala agla text uthao
+                // Step C: Agar "Answer" mila, toh uske baad wala agla tag uthao
                 if (extracted.toLowerCase() === 'answer') {
                     // Dhoondho uske baad wala agla tag (Real Answer)
-                    const nextTagStart = blockHtml.indexOf('>', textEnd);
+                    const nextTagStart = blockHtml.indexOf('<strong>', textEnd);
                     if (nextTagStart !== -1) {
-                        const nextTextStart = nextTagStart + 1;
-                        const nextTextEnd = blockHtml.indexOf('<', nextTextStart);
+                        const nextTextStart = blockHtml.indexOf('>', nextTagStart) + 1;
+                        const nextTextEnd = blockHtml.indexOf('</strong>', nextTextStart);
                         if (nextTextStart !== -1 && nextTextEnd !== -1) {
                             let realAnswer = blockHtml.substring(nextTextStart, nextTextEnd).trim();
                             realAnswer = realAnswer.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
