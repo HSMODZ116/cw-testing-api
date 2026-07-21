@@ -100,8 +100,8 @@ async function scrapeTelenorQuiz(dateQuery) {
     let startIndex = html.indexOf(currentLabel);
     let endIndex = nextLabel ? html.indexOf(nextLabel, startIndex + 1) : html.length;
     
-    // Safety: Agar "Question 5" ke baad "How to" ya "FAQs" aata hai, toh cut kar do
-    const extraCutoffIndex = html.indexOf('How to Play', startIndex);
+    // Safety: Cut off extra content
+    const extraCutoffIndex = html.indexOf('Video Guide', startIndex);
     if (extraCutoffIndex !== -1 && extraCutoffIndex < endIndex && i === 4) {
         endIndex = extraCutoffIndex;
     }
@@ -110,10 +110,10 @@ async function scrapeTelenorQuiz(dateQuery) {
     
     let blockHtml = html.substring(startIndex, endIndex);
 
-    // 2. Extract Clean Question (Remove Options from text)
+    // 2. Extract Clean Question (Remove Options)
     let question = `Question ${i+1}:`;
-    // Regex: "Question X:" ke baad ka text uthao jab tak <br> ya <p> start na ho jaye
-    let qMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+?)(?=\s*<br\s*\/?>|\s*<p|\s*<ul|\s*<strong)/i);
+    // FIX: Question ke baad "<br />" tak rukna (Options se pehle)
+    let qMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+?)(?=\s*<br\s*\/?>)/i);
     if (qMatch && qMatch[1]) {
         question = "Question " + (i+1) + ": " + qMatch[1].trim();
     }
@@ -121,14 +121,12 @@ async function scrapeTelenorQuiz(dateQuery) {
     // 3. Extract Correct Answer (Target EXACT Green Button Class)
     let correctAnswer = "Answer not found";
 
-    // Step A: Search for the exact Green Button Class ID found in your HTML file
-    // HTML me Green Button ka class exactly yeh hai: "kt-adv-heading11_549588-20"
+    // Step A: Search for the exact Green Button Class ID
     const greenBtnClass = 'class="kt-adv-heading11_549588-20"';
     const greenBtnIndex = blockHtml.indexOf(greenBtnClass);
     
     if (greenBtnIndex !== -1) {
-        // Step B: Class start (>) ke baad ka text uthana
-        // '>' aur uske baad wale '<' ke beech ka text extract karna
+        // Step B: Class ke andar ka text uthana
         const closeTagIndex = blockHtml.indexOf('>', greenBtnIndex);
         if (closeTagIndex !== -1) {
             const textStart = closeTagIndex + 1;
@@ -136,19 +134,33 @@ async function scrapeTelenorQuiz(dateQuery) {
             
             if (textStart !== -1 && textEnd !== -1) {
                 let extracted = blockHtml.substring(textStart, textEnd).trim();
-                
-                // Clean HTML entities & Tags (Remove <strong> if it exists inside)
                 extracted = extracted.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
                 
-                // Step C: Filter out "Answer" label (Only if it's not the correct answer)
-                if (extracted.toLowerCase() !== 'answer' && extracted.length > 0 && extracted.length < 200) {
+                // Step C: Agar "Answer" mila, toh uske baad wala agla text uthao
+                if (extracted.toLowerCase() === 'answer') {
+                    // Dhoondho uske baad wala agla tag (Real Answer)
+                    const nextTagStart = blockHtml.indexOf('>', textEnd);
+                    if (nextTagStart !== -1) {
+                        const nextTextStart = nextTagStart + 1;
+                        const nextTextEnd = blockHtml.indexOf('<', nextTextStart);
+                        if (nextTextStart !== -1 && nextTextEnd !== -1) {
+                            let realAnswer = blockHtml.substring(nextTextStart, nextTextEnd).trim();
+                            realAnswer = realAnswer.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
+                            
+                            if (realAnswer.length > 0 && realAnswer.length < 200) {
+                                correctAnswer = realAnswer;
+                            }
+                        }
+                    }
+                } else if (extracted.length > 0 && extracted.length < 200) {
+                    // Agar "Answer" label nahi hai, toh seedha text uthao (Q2 style)
                     correctAnswer = extracted;
                 }
             }
         }
     }
 
-    // 4. Final Cleanup (Remove extra spaces and quotes)
+    // 4. Final Cleanup
     question = question.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
     correctAnswer = correctAnswer.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
 
