@@ -64,12 +64,13 @@ function jsonResponse(data, status = 200) {
 }
 
 async function scrapeTelenorQuiz(dateQuery) {
-  const TARGET_URL = `https://telenorquiztodays.pk/`;
+  const TARGET_URL = `https://mytelenoranswertoday.pk/`;
   
+  // Cookies (From DevTools Screenshots)
   const cookies = [
-    "_ga=GA1.1.2137942815.1784559948;",
-    "_ga_5FRVYN66BF=GS2.1.1784559947.1.0.1784559956.0.0.0;",
-    "__cf_bm=3ScbNnhJ7vXX6s43hXn5Xg9eS2.D8zKUVmJHeiWbwfw-1784559948-1.0.1.1-n9FvZRlV43PkbURqSvoYjnnqSpxLLfK5w9k3Kkf00Kpdrz7Lq7lDl3Vj2oy3sNrzK8GdR5ccvB5mD3HdUt_tvWySBQ2AS7sSC7C4UYk0;"
+    "_ga=GA1.1.1649597395.1784556291;",
+    "_ga_GS8LVG5EDC=GS2.1.1784640995.4.0.1784641040.0.0.0;",
+    "__cf_bm=5FJwBp2V8NzK9HwWpLQTCg53PMHZ8wPcWXWm1K0H72mXY-1784640996-1.0.1.1-tv0u1aRfJXgE9.5Z4AQd6i3dZoc_K.BESrW8Cmaay0;"
   ].join(' ');
 
   const headers = {
@@ -87,7 +88,6 @@ async function scrapeTelenorQuiz(dateQuery) {
   }
 
   const html = await response.text();
-
   const results = [];
 
   // 1. HTML ko 5 Question Blocks mein todna
@@ -100,41 +100,47 @@ async function scrapeTelenorQuiz(dateQuery) {
     let startIndex = html.indexOf(currentLabel);
     let endIndex = nextLabel ? html.indexOf(nextLabel, startIndex + 1) : html.length;
     
-    // Safety: Cut off extra content like FAQs from Q5 block
-    const faqsIndex = html.indexOf('FAQs', startIndex);
-    if (faqsIndex !== -1 && faqsIndex < endIndex) {
-        endIndex = faqsIndex;
+    // Safety: Agar "Question 5" ke baad "How to" ya "FAQs" aata hai, toh cut kar do
+    const extraCutoffIndex = html.indexOf('How to Play', startIndex);
+    if (extraCutoffIndex !== -1 && extraCutoffIndex < endIndex && i === 4) {
+        endIndex = extraCutoffIndex;
     }
 
     if (startIndex === -1) continue;
     
     let blockHtml = html.substring(startIndex, endIndex);
 
-    // 2. Extract Clean Question
+    // 2. Extract Clean Question (Remove Options from text)
     let question = `Question ${i+1}:`;
+    // Regex: "Question X:" ke baad ka text uthao jab tak <br> ya <p> start na ho jaye
     let qMatch = blockHtml.match(/Question\s*\d+:\s*([^<]+?)(?=\s*<br\s*\/?>|\s*<p|\s*<ul|\s*<strong)/i);
     if (qMatch && qMatch[1]) {
         question = "Question " + (i+1) + ": " + qMatch[1].trim();
     }
 
-    // 3. EXTRACT CORRECT ANSWER (FINAL, PERFECT LOGIC)
+    // 3. Extract Correct Answer (Target EXACT Green Button Class)
     let correctAnswer = "Answer not found";
 
-    // LAYER 1: Search for the EXACT Green Button Class used in Q3, Q4, Q5
-    const greenBtnClass = 'class="kt-adv-heading14_b823be-d9"';
+    // Step A: Search for the exact Green Button Class ID found in your HTML file
+    // HTML me Green Button ka class exactly yeh hai: "kt-adv-heading11_549588-20"
+    const greenBtnClass = 'class="kt-adv-heading11_549588-20"';
     const greenBtnIndex = blockHtml.indexOf(greenBtnClass);
     
     if (greenBtnIndex !== -1) {
-        // Extract text inside the tag
+        // Step B: Class start (>) ke baad ka text uthana
+        // '>' aur uske baad wale '<' ke beech ka text extract karna
         const closeTagIndex = blockHtml.indexOf('>', greenBtnIndex);
         if (closeTagIndex !== -1) {
-            const contentStart = closeTagIndex + 1;
-            const contentEnd = blockHtml.indexOf('<', contentStart);
+            const textStart = closeTagIndex + 1;
+            const textEnd = blockHtml.indexOf('<', textStart);
             
-            if (contentStart !== -1 && contentEnd !== -1) {
-                let extractedHtml = blockHtml.substring(contentStart, contentEnd).trim();
-                let extracted = extractedHtml.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
+            if (textStart !== -1 && textEnd !== -1) {
+                let extracted = blockHtml.substring(textStart, textEnd).trim();
                 
+                // Clean HTML entities & Tags (Remove <strong> if it exists inside)
+                extracted = extracted.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
+                
+                // Step C: Filter out "Answer" label (Only if it's not the correct answer)
                 if (extracted.toLowerCase() !== 'answer' && extracted.length > 0 && extracted.length < 200) {
                     correctAnswer = extracted;
                 }
@@ -142,29 +148,7 @@ async function scrapeTelenorQuiz(dateQuery) {
         }
     }
 
-    // LAYER 2: If exact class fails, try finding <strong> (Fixes Q2 and Q1)
-    if (correctAnswer === "Answer not found") {
-        const strongMatch = blockHtml.match(/<strong>([^<]+)<\/strong>/i);
-        if (strongMatch && strongMatch[1]) {
-            let ans = strongMatch[1].trim();
-            if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
-                correctAnswer = ans;
-            }
-        }
-    }
-
-    // LAYER 3: If both fail, try the generic "kt-adv-heading" class (Fallback)
-    if (correctAnswer === "Answer not found") {
-        const genericMatch = blockHtml.match(/class="[^"]*kt-adv-heading[^"]*"[^>]*>[\s\S]*?(?:<strong>)?(.*?)(?:<\/strong>)?(?=\s*<\/p>|<br)/i);
-        if (genericMatch && genericMatch[1]) {
-            let ans = genericMatch[1].trim();
-            if(ans.toLowerCase() !== 'answer' && ans.length > 0 && ans.length < 100) {
-                correctAnswer = ans;
-            }
-        }
-    }
-
-    // 4. Clean up HTML entities for final output
+    // 4. Final Cleanup (Remove extra spaces and quotes)
     question = question.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
     correctAnswer = correctAnswer.replace(/&nbsp;|&#8220;|&#8221;|&ldquo;|&rdquo;|&amp;/g, ' ').trim();
 
